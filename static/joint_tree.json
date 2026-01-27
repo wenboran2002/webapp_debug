@@ -1,0 +1,20 @@
+{
+    "Head": ["Nose", "REye", "LEye", "REar", "LEar"],
+    "Neck": [],
+    "R_Shoulder": ["R_Elbow"],
+    "R_Elbow": ["R_Wrist"],
+    "R_Wrist": ["R_Thumb_1", "R_Thumb_2", "R_Thumb_3", "R_Thumb_4", "R_Index_1", "R_Index_2", "R_Index_3", "R_Index_4", "R_Middle_1", "R_Middle_2", "R_Middle_3", "R_Middle_4", "R_Ring_1", "R_Ring_2", "R_Ring_3", "R_Ring_4", "R_Pinky_1", "R_Pinky_2", "R_Pinky_3", "R_Pinky_4"],
+    "L_Shoulder": ["L_Elbow"],
+    "L_Elbow": ["L_Wrist"],
+    "L_Wrist": ["L_Thumb_1", "L_Thumb_2", "L_Thumb_3", "L_Thumb_4", "L_Index_1", "L_Index_2", "L_Index_3", "L_Index_4", "L_Middle_1", "L_Middle_2", "L_Middle_3", "L_Middle_4", "L_Ring_1", "L_Ring_2", "L_Ring_3", "L_Ring_4", "L_Pinky_1", "L_Pinky_2", "L_Pinky_3", "L_Pinky_4"],
+    "Spine2": ["Spine3"],
+    "Spine3": ["Neck", "R_Shoulder", "L_Shoulder"],
+    "Spine1": ["Spine2"],
+    "Pelvis": ["R_Hip", "L_Hip", "Spine1"],
+    "R_Hip": ["R_Knee"],
+    "R_Knee": ["R_Ankle"],
+    "R_Ankle": ["R_Heel", "R_BigToe", "R_SmallToe"],
+    "L_Hip": ["L_Knee"],
+    "L_Knee": ["L_Ankle"],
+    "L_Ankle": ["L_Heel", "L_BigToe", "L_SmallToe"]
+}

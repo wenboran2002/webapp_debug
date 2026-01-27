@@ -1,0 +1,47 @@
+/* Joint Selector Buttons */
+.joint-btn {
+    position: absolute;
+    background-color: rgba(23, 162, 184, 0.1); /* outline-info style */
+    border: 1px solid #17a2b8;
+    color: #17a2b8;
+    padding: 2px 4px;
+    font-size: 10px;
+    cursor: pointer;
+    border-radius: 3px;
+    z-index: 10;
+    white-space: nowrap;
+}
+
+.joint-btn:hover {
+    background-color: #17a2b8;
+    color: white;
+}
+
+/* Context Menu for Sub-joints */
+.context-menu {
+    display: none;
+    position: absolute;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+    z-index: 3000;
+    min-width: 120px;
+    border-radius: 4px;
+}
+
+.context-menu-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #333;
+}
+
+.context-menu-item:hover {
+    background-color: #f0f0f0;
+}
+
+.context-menu-separator {
+    height: 1px;
+    background-color: #eee;
+    margin: 4px 0;
+}

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Annotation Tool</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/toolbar.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dropdown.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/joint_selector.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style_extra.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="header" style="text-align: center; margin-bottom: 30px; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);">
+            <h1 style="margin: 0 0 15px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-size: 32px; font-weight: 700;">4DHOI Annotation Tool</h1>
+            <div id="file-info" style="font-size: 14px; color: #555; margin-top: 10px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                <span id="info-video" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Video: -</span>
+                <span id="info-object" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Object: -</span>
+                <span id="info-res" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Res: -</span>
+                <span id="info-fps" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">FPS: -</span>
+                <span id="info-frames" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Frames: -</span>
+            </div>
+        </div>
+
+        <div class="video-panel">
+            <div id="video-container" style="position: relative;">
+                <img id="video-frame" src="" alt="Video Frame" style="display: block; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; width: 100%; height: auto;">
+                <!-- 2D tracking overlay for main video -->
+                <canvas id="main-video-overlay" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
+            </div>
+            <div class="controls" style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
+                <button id="play-pause" class="btn-control" style="min-width: 100px;">▶ Play</button>
+                <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 300px;">
+                    <input type="range" id="frame-slider" min="0" max="100" value="0" style="flex: 1;">
+                    <span id="frame-display" style="min-width: 90px; color: white; font-weight: 600; font-size: 14px; text-align: center;">Frame: 0</span>
+                </div>
+                
+                <div style="width: 1px; height: 30px; background: rgba(255, 255, 255, 0.2);"></div>
+                
+                <div class="toggle-container" style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-weight: 600; color: rgba(255, 255, 255, 0.9); font-size: 14px;">Static Object</span>
+                    <label class="switch">
+                        <input type="checkbox" id="static-object">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                
+                <button id="btn-check-scale" class="btn-control" style="background: linear-gradient(135deg, #17a2b8 0%, #11998e 100%); box-shadow: 0 4px 15px rgba(23, 162, 184, 0.4);">Check Scale</button>
+                <button id="btn-annotate" class="btn-annotate">Annotate</button>
+
+                <!-- Optimization Button -->
+                <button id="btn-optimize" class="btn-control" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);">Optimize</button>
+
+                <!-- Focus Hand Button -->
+                <button id="btn-focus-hand" class="btn-control" style="background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%); box-shadow: 0 4px 15px rgba(255, 193, 7, 0.4);">Focus Hand</button>
+
+                <!-- Global fancy Save-All button on the main page (final export) -->
+                <button id="save-annotation-main" class="btn-annotate" style="background: linear-gradient(135deg, #ff7e5f 0%, #feb47b 100%); box-shadow: 0 6px 18px rgba(255, 126, 95, 0.55); border-radius: 999px; padding: 10px 26px; font-size: 15px; font-weight: 700; letter-spacing: 0.03em;">
+                    Save All Frames
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scale Check Modal -->
+    <div id="scale-modal" class="modal">
+        <div class="modal-content" style="width: 90%; height: 90%;">
+            <div class="modal-header">
+                <h3>Scale Check - Frame <span id="scale-frame-idx">0</span></h3>
+                <button id="close-scale-modal" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 0; height: calc(100% - 50px); display: flex; flex-direction: column; gap: 8px;">
+                <div style="padding: 8px 16px; display: flex; align-items: center; gap: 12px; background: #f5f7fa; border-bottom: 1px solid #dde2eb; flex-shrink: 0; flex-wrap: wrap;">
+                    <span style="font-weight: 600; color: #333;">Rescale Object</span>
+                    <input id="input-scale-factor" type="number" step="0.01" min="0" placeholder="e.g. 1.0" style="width: 100px; padding: 4px 8px; border-radius: 4px; border: 1px solid #ccc;">
+                    <input id="slider-scale-factor" type="range" min="0.1" max="5" step="0.01" value="1.0" style="flex: 1; min-width: 200px; max-width: 400px;">
+                    <span id="slider-scale-value" style="min-width: 50px; text-align: center; font-weight: 600; color: #667eea;">1.00</span>
+                    <button id="btn-apply-scale" class="btn-control" style="padding: 6px 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; font-size: 13px;">Apply Scale</button>
+                    <span id="scale-status" style="font-size: 12px; color: #666;"></span>
+                </div>
+                <div id="scale-viewer" style="width: 100%; flex: 1; height: 100%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for 3D Annotation -->
+    <div id="annotation-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Annotate Frame <span id="modal-frame-idx">0</span></h3>
+                <button id="close-modal" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="toolbar">
+                    <!-- 3D Tools -->
+                    <div id="tools-3d" class="mode-group" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+                        <button id="mode-view" class="mode-btn active">View</button>
+                        <button id="mode-select" class="mode-btn">Select</button>
+                        <button id="mode-delete" class="mode-btn">Delete</button>
+                        
+                        <div class="separator" style="width: 1px; height: 20px; background: #ccc; margin: 0 10px;"></div>
+                        
+                        <!-- Human Mapping -->
+                        <!-- Moved to Right Panel -->
+
+                        <!-- 2D Tracking -->
+                        <!-- Moved to Right Panel -->
+                        
+                        <button id="btn-manage" class="mode-btn" style="background-color: #ffc107; border-color: #ffc107; color: #000;">Manage Annotations</button>
+                    </div>
+                </div>
+                
+                <div class="viewers-container" style="display: flex; width: 100%; height: calc(100vh - 150px); gap: 10px; min-height: 400px;">
+                    <!-- Left Panel: 3D Viewer -->
+                    <div id="3d-viewer-container" style="flex: 1; display: flex; flex-direction: column; border: 2px solid rgba(102, 126, 234, 0.2); border-radius: 12px; min-width: 0; overflow: hidden; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);">
+                        <div style="padding: 12px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600; font-size: 16px;">3D Object View</div>
+                        <div id="3d-viewer" style="flex: 1; min-height: 0; background: #f8f9fa;"></div>
+                    </div>
+                    
+                    <!-- Right Panel: Context (Human Joints OR 2D View) -->
+                    <div id="right-context-panel" style="flex: 1; display: flex; flex-direction: column; border: 2px solid rgba(102, 126, 234, 0.2); border-radius: 12px; min-width: 0; overflow: hidden; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);">
+                        <!-- Tabs -->
+                        <div class="panel-tabs" style="display: flex; background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%); border-bottom: 2px solid rgba(102, 126, 234, 0.2); flex-shrink: 0;">
+                            <button id="tab-human" class="panel-tab active" style="flex: 1; padding: 12px; border: none; background: white; cursor: pointer; font-weight: 600; color: #667eea; border-top-left-radius: 12px; transition: all 0.3s ease;">Human Joints</button>
+                            <button id="tab-2d" class="panel-tab" style="flex: 1; padding: 12px; border: none; background: transparent; cursor: pointer; font-weight: 600; color: #666; transition: all 0.3s ease;">2D View</button>
+                        </div>
+                        
+                        <!-- Content: Human Joints -->
+                        <div id="panel-human-joints" style="flex: 1; display: flex; flex-direction: column; padding: 20px; overflow-y: auto; min-height: 0; background: white;">
+                            <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; padding: 12px; background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%); border-radius: 8px;">
+                                <span style="font-weight: 600; color: #333;">Selected Joint: <strong id="selected-joint-display" style="color: #667eea;">None</strong></span>
+                                <button id="btn-set-joint" class="mode-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border-radius: 6px; font-weight: 600;">Link to Joint</button>
+                            </div>
+                            
+                            <div id="human-image-container" style="position: relative; width: 100%; flex: 1; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); margin-bottom: 10px; min-height: 0; border-radius: 8px; overflow: hidden; box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.1);">
+                                <img id="human-ref-img" src="/asset/data/human_kp.png" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;">
+                                <!-- Buttons will be injected here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Content: 2D View -->
+                        <div id="panel-2d-view" style="display: none; flex: 1; flex-direction: column; padding: 0; min-height: 0; background: white;">
+                            <div style="padding: 15px 20px; background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%); border-bottom: 2px solid rgba(102, 126, 234, 0.2); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                                <span style="font-weight: 600; color: #333;">2D Tracking</span>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span id="2d-status" style="font-size: 13px; color: #666; padding: 5px 12px; background: white; border-radius: 6px;">Select 3D point first</span>
+                                    <button id="btn-track-2d" class="mode-btn" disabled style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border-radius: 6px; font-weight: 600;">Track 2D Point</button>
+                                    <button id="btn-track-2d-all" class="mode-btn" disabled style="background: linear-gradient(135deg, #28a745 0%, #218838 100%); color: white; padding: 8px 16px; border-radius: 6px; font-weight: 600;">Track All</button>
+                                </div>
+                            </div>
+                            <div id="2d-viewer-container" style="flex: 1; position: relative; background: #000; display: flex; justify-content: center; align-items: center; overflow: hidden; min-height: 0;">
+                                <div style="position: relative; width: 100%; height: 100%;">
+                                    <img id="modal-video-frame" src="" alt="Video Frame" style="width: 100%; height: 100%; object-fit: contain;">
+                                    <canvas id="modal-video-overlay" style="position: absolute; top: 0; left: 0; pointer-events: auto;"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Management Panel (Hidden by default) -->
+                <div id="management-panel" style="display:none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 600px; max-height: 500px; background: white; border: 1px solid #ccc; box-shadow: 0 0 20px rgba(0,0,0,0.3); z-index: 3000; padding: 20px; overflow-y: auto;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                        <h3>Annotation Manager</h3>
+                        <button id="close-manager" style="padding: 5px 10px;">&times;</button>
+                    </div>
+                    <table id="annotation-table" style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f0f0f0; text-align: left;">
+                                <th style="padding: 8px;">Obj Point ID</th>
+                                <th style="padding: 8px;">Type</th>
+                                <th style="padding: 8px;">Target</th>
+                                <th style="padding: 8px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Human Keypoint Selector (Interactive) -->
+                <!-- Integrated into Right Panel -->
+
+                <div class="annotation-controls">
+                    <button id="save-annotation">Save Annotation</button>
+                    <div id="status-message"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Focus View Modal -->
+    <div id="focus-modal" class="modal">
+        <div class="modal-content" style="width: 90%; height: 90%;">
+            <div class="modal-header">
+                <h3>Hand Focus View - Frame <span id="focus-frame-idx">0</span></h3>
+                <div style="margin-left: 20px;">
+                     <button id="btn-focus-magnify" class="mode-btn" style="background-color: #17a2b8; color: white; padding: 5px 10px; font-size: 12px;">Magnify</button>
+                     <button id="btn-focus-reset" class="mode-btn" style="background-color: #6c757d; color: white; padding: 5px 10px; font-size: 12px; margin-left: 5px;">Reset View</button>
+                </div>
+                <button id="close-focus-modal" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 0; height: calc(100% - 50px);">
+                <div id="focus-viewer" style="width: 100%; height: 100%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
