@@ -1254,9 +1254,14 @@ $(document).ready(function() {
     }
 
     function loadMesh() {
+        $('#scene-status').text('Scene: loading mesh...');
         $.get('api/mesh', function(data) {
             meshData = data;
             renderMesh();
+            $('#scene-status').text('Scene: ready');
+        }).fail(function(xhr) {
+            console.warn('Failed to load mesh:', xhr.responseJSON || xhr.statusText);
+            $('#scene-status').text('Scene: mesh not available');
         });
     }
 

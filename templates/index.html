@@ -51,13 +51,21 @@
                 </div>
             </div>
 
-            <div class="video-panel" style="max-width: 960px; margin: 0 auto;">
-            <div id="video-container" style="position: relative; width: 100%; max-width: 960px; height: 540px; background: #000; overflow: hidden; border-radius: 8px;">
-                <img id="video-frame" src="" alt="Video Frame" style="display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; background: #000;">
+            <div class="video-panel" style="text-align: center;">
+            <div id="video-container" style="position: relative; display: inline-block; line-height: 0; background: #000; border-radius: 8px; overflow: hidden;">
+                <img id="video-frame" src="" alt="Video Frame"
+                     style="display: block;
+                            image-rendering: -webkit-optimize-contrast;
+                            image-rendering: crisp-edges;
+                            max-height: 75vh;
+                            max-width: 100%;
+                            width: auto;
+                            height: auto;
+                            background: #000;">
                 <!-- 2D tracking overlay for main video -->
-                <canvas id="main-video-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
+                <canvas id="main-video-overlay" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
             </div>
-            <div class="controls" style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
+            <div class="controls" style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; margin-top: 10px;">
                 <button id="play-pause" class="btn-control" style="min-width: 100px;">▶ Play</button>
                 <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 300px;">
                     <input type="range" id="frame-slider" min="0" max="100" value="0" style="flex: 1;">

@@ -50,7 +50,7 @@ SCENE_DATA = None
 # --- HOI 标注任务 / upload_records 管理 ---
 
 # 4d_preprocess_debug 目录（make_hoi.py 所在目录）
-PREPROCESS_DIR = Path(__file__).resolve().parent.parent / "4d_preprocess_debug"
+PREPROCESS_DIR = Path(__file__).resolve().parent.parent / "4dhoi_autorecon"
 UPLOAD_RECORDS_PATH = PREPROCESS_DIR / "upload_records.json"
 
 # 当前这台机器“锁定”的待标注任务（annotation_progress: 2.0 -> 2.1）
