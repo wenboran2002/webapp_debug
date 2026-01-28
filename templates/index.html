@@ -4,13 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D Annotation Tool</title>
+    <!-- 强制所有相对路径以当前 /proxy/5010/ 为基准，避免被外层 Notebook 重写为站点根目录 -->
+    <base href="./">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/toolbar.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dropdown.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/joint_selector.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style_extra.css') }}">
+    <!-- 使用相对路径，避免 Notebook 代理下的根路径问题 -->
+    <link rel="stylesheet" href="static/css/style.css">
+    <link rel="stylesheet" href="static/css/toolbar.css">
+    <link rel="stylesheet" href="static/css/dropdown.css">
+    <link rel="stylesheet" href="static/css/joint_selector.css">
+    <link rel="stylesheet" href="static/css/style_extra.css">
 </head>
 <body>
     <div class="container" style="display: flex; gap: 20px; align-items: flex-start;">
@@ -43,11 +46,11 @@
                 </div>
             </div>
 
-            <div class="video-panel">
-            <div id="video-container" style="position: relative;">
-                <img id="video-frame" src="" alt="Video Frame" style="display: block; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; width: 100%; height: auto;">
+            <div class="video-panel" style="max-width: 960px; margin: 0 auto;">
+            <div id="video-container" style="position: relative; width: 100%; max-width: 960px; height: 540px; background: #000; overflow: hidden; border-radius: 8px;">
+                <img id="video-frame" src="" alt="Video Frame" style="display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; background: #000;">
                 <!-- 2D tracking overlay for main video -->
-                <canvas id="main-video-overlay" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
+                <canvas id="main-video-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
             </div>
             <div class="controls" style="display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap;">
                 <button id="play-pause" class="btn-control" style="min-width: 100px;">▶ Play</button>
@@ -155,7 +158,7 @@
                             </div>
                             
                             <div id="human-image-container" style="position: relative; width: 100%; flex: 1; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); margin-bottom: 10px; min-height: 0; border-radius: 8px; overflow: hidden; box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.1);">
-                                <img id="human-ref-img" src="/asset/data/human_kp.png" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;">
+                                <img id="human-ref-img" src="asset/data/human_kp.png" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain;">
                                 <!-- Buttons will be injected here -->
                             </div>
                         </div>
@@ -228,6 +231,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <!-- 使用相对路径加载主脚本 -->
+    <script src="static/js/main.js"></script>
 </body>
 </html>

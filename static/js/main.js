@@ -82,7 +82,7 @@ $(document).ready(function() {
                     // 图像加载完成后加入缓存
                     preloadCache.set(frameNum, img);
                 };
-                img.src = '/api/frame/' + frameNum;
+                img.src = 'api/frame/' + frameNum;
             });
         }
     
@@ -117,7 +117,7 @@ $(document).ready(function() {
             
             // 2. Run optimization
             $.ajax({
-                url: '/api/run_optimization',
+            url: 'api/run_optimization',
                 type: 'POST',
                 contentType: 'application/json',
                 data: JSON.stringify({
@@ -149,7 +149,7 @@ $(document).ready(function() {
     // For now, we start fresh or rely on what's in memory if page isn't reloaded.
 
     function loadJointTree() {
-        $.getJSON('/asset/data/joint_tree.json', function(data) {
+        $.getJSON('asset/data/joint_tree.json', function(data) {
             jointTree = data;
             initJointDropdown();
         });
@@ -157,8 +157,8 @@ $(document).ready(function() {
 
     function loadHumanSelectorData() {
         $.when(
-            $.getJSON('/asset/data/main_joint.json'),
-            $.getJSON('/asset/data/button_name.json')
+            $.getJSON('asset/data/main_joint.json'),
+            $.getJSON('asset/data/button_name.json')
         ).done(function(coords, names) {
             mainJointCoords = coords[0];
             buttonNames = names[0];
@@ -530,7 +530,7 @@ $(document).ready(function() {
 
     function runTrackingForObject(objIdx, startFrame, x, y, onDone, onError) {
         $.ajax({
-            url: '/api/track_2d',
+            url: 'api/track_2d',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({
@@ -691,7 +691,7 @@ $(document).ready(function() {
             }
 
             $.ajax({
-                url: '/api/track_2d_multi',
+                url: 'api/track_2d_multi',
                 type: 'POST',
                 contentType: 'application/json',
                 data: JSON.stringify({
@@ -873,7 +873,7 @@ $(document).ready(function() {
     }
 
     function fetchMetadata() {
-        $.get('/api/metadata', function(data) {
+        $.get('api/metadata', function(data) {
             totalFrames = data.total_frames;
             fps = data.fps || 30; // Use original video fps
             $('#frame-slider').attr('max', totalFrames - 1);
@@ -924,7 +924,7 @@ $(document).ready(function() {
                 // Cache the loaded image
                 preloadCache.set(frameNum, img);
             };
-            img.src = '/api/frame/' + frameNum + '?t=' + Date.now();
+            img.src = 'api/frame/' + frameNum + '?t=' + Date.now();
         });
     }
     
@@ -938,7 +938,7 @@ $(document).ready(function() {
     // ---------------- HOI 标注任务相关（progress 2.0 列表 + 开始/结束按钮） ----------------
 
     function loadHoiTasks() {
-        $.getJSON('/api/hoi_tasks', function(resp) {
+        $.getJSON('api/hoi_tasks', function(resp) {
             const list = resp.tasks || [];
             renderHoiList(list);
         }).fail(function(xhr) {
@@ -1000,7 +1000,7 @@ $(document).ready(function() {
         }
         $('#hoi-status').text('正在加载视频与场景数据...');
         $.ajax({
-            url: '/api/hoi_start',
+            url: 'api/hoi_start',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ session_folder: selectedSessionFolder }),
@@ -1025,7 +1025,7 @@ $(document).ready(function() {
         }
         $('#hoi-status').text('正在结束标注并释放该视频...');
         $.ajax({
-            url: '/api/hoi_finish',
+            url: 'api/hoi_finish',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ session_folder: currentSessionFolder }),
@@ -1063,7 +1063,7 @@ $(document).ready(function() {
         $('#scale-status').text('Applying scale, please wait...');
 
         $.ajax({
-            url: '/api/set_scale',
+            url: 'api/set_scale',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ scale_factor: scale }),
@@ -1112,7 +1112,7 @@ $(document).ready(function() {
             yaxis: { visible: false }
         });
 
-        $.get('/api/scene_data/' + frameIdx, function(data) {
+        $.get('api/scene_data/' + frameIdx, function(data) {
             const human = data.human;
             const object = data.object;
 
@@ -1247,7 +1247,7 @@ $(document).ready(function() {
     }
 
     function loadMesh() {
-        $.get('/api/mesh', function(data) {
+        $.get('api/mesh', function(data) {
             meshData = data;
             renderMesh();
         });
@@ -1532,7 +1532,7 @@ $(document).ready(function() {
 
             const videoFrame = $('#video-frame')[0];
             const modalVideoFrame = $('#modal-video-frame')[0];
-            const frameSrc = '/api/frame/' + currentFrame;
+            const frameSrc = 'api/frame/' + currentFrame;
 
             // 主视频区域：直接切换图片，不做任何变暗/过渡效果，避免闪烁
             if (videoFrame) {
@@ -1586,7 +1586,7 @@ $(document).ready(function() {
         }
         
         // 使用稳定 URL，交给浏览器和后端缓存处理
-        const frameSrc = '/api/frame/' + currentFrame;
+        const frameSrc = 'api/frame/' + currentFrame;
         
         // Update video frame images when用户跳帧/暂停时查看
         const videoFrame = $('#video-frame')[0];
@@ -1789,7 +1789,7 @@ $(document).ready(function() {
         };
 
         $.ajax({
-            url: '/api/save_merged_annotations',
+            url: 'api/save_merged_annotations',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify(payload),
@@ -1823,7 +1823,7 @@ $(document).ready(function() {
         }
 
         $.ajax({
-            url: '/api/save_annotation',
+            url: 'api/save_annotation',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({
@@ -1845,7 +1845,7 @@ $(document).ready(function() {
         const isStatic = $('#static-object').is(':checked');
 
         $.ajax({
-            url: '/api/save_merged_annotations',
+            url: 'api/save_merged_annotations',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({
@@ -2028,7 +2028,7 @@ $(document).ready(function() {
         const gd = document.getElementById('focus-viewer');
         // Plotly.purge(gd); // Optional: Clear previous
 
-        $.get('/api/focus_hand/' + frameIdx, function(data) {
+        $.get('api/focus_hand/' + frameIdx, function(data) {
             const human = data.human;
             const object = data.object;
             const camera = data.camera;

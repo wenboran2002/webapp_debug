@@ -361,7 +361,7 @@ class SceneData:
                 print(f"SMPL-X model not found at {model_path}")
             
             # Load Motion Data
-            motion_path = os.path.join(self.video_dir, 'motion', 'result.pt')
+            motion_path = os.path.join(self.video_dir, 'motion', 'result_hand.pt')
             if os.path.exists(motion_path):
                 self.motion_data = torch.load(motion_path, map_location=self.device)
                 # Get total frames from motion data
