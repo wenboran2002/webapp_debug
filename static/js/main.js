@@ -873,6 +873,7 @@ $(document).ready(function() {
     }
 
     function fetchMetadata() {
+        $('#scene-status').text('Scene: loading metadata...');
         $.get('api/metadata', function(data) {
             totalFrames = data.total_frames;
             fps = data.fps || 30; // Use original video fps
@@ -885,13 +886,16 @@ $(document).ready(function() {
             $('#info-fps').text(`FPS: ${Math.round(fps)}`);
             $('#info-frames').text(`Frames: ${totalFrames}`);
             
-            // Preload first frame
+            // 预加载第一帧
+            $('#scene-status').text('Scene: loading frame 0...');
             loadFrame(0);
             
-            // Preload next few frames for smoother playback
+            // 预加载后续几帧
             preloadFrames(0, Math.min(5, totalFrames - 1));
+            $('#scene-status').text('Scene: ready');
         }).fail(function(xhr) {
             console.warn('Failed to fetch metadata:', xhr.responseJSON || xhr.statusText);
+            $('#scene-status').text('Scene: failed to load metadata');
         });
     }
     
@@ -999,6 +1003,7 @@ $(document).ready(function() {
             return;
         }
         $('#hoi-status').text('正在加载视频与场景数据...');
+        $('#scene-status').text('Scene: initializing...');
         $.ajax({
             url: 'api/hoi_start',
             type: 'POST',
@@ -1007,6 +1012,7 @@ $(document).ready(function() {
             success: function(resp) {
                 currentSessionFolder = selectedSessionFolder;
                 $('#hoi-status').text('加载成功，正在刷新视频与场景...');
+                $('#scene-status').text('Scene: loading metadata & first frame...');
                 // 刷新元数据与 3D mesh
                 fetchMetadata();
                 loadMesh();
@@ -1014,6 +1020,7 @@ $(document).ready(function() {
             error: function(xhr) {
                 const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
                 $('#hoi-status').text('开始标注失败：' + msg);
+                $('#scene-status').text('Scene: error – ' + msg);
             }
         });
     });
