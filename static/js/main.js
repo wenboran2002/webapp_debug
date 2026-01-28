@@ -92,11 +92,15 @@ $(document).ready(function() {
     let humanTrace = null;   // Human keypoints (Green)
     let layout = null;
 
+    // 当前选中的 session_folder（来自 upload_records.json）
+    let currentSessionFolder = null;
+    let selectedSessionFolder = null;
+
     // Initialize
     loadJointTree();
     loadHumanSelectorData();
-    fetchMetadata();
-    loadMesh();
+    // 先加载 HOI 列表，用户选择并点击“开始标注”后，再拉取 metadata / mesh
+    loadHoiTasks();
 
     // Optimization Button Handler
     $('#btn-optimize').click(function() {
@@ -886,6 +890,8 @@ $(document).ready(function() {
             
             // Preload next few frames for smoother playback
             preloadFrames(0, Math.min(5, totalFrames - 1));
+        }).fail(function(xhr) {
+            console.warn('Failed to fetch metadata:', xhr.responseJSON || xhr.statusText);
         });
     }
     
@@ -927,6 +933,113 @@ $(document).ready(function() {
         const isStatic = $(this).is(':checked');
         console.log("Static Object mode:", isStatic);
         // TODO: Send this state to backend if needed for tracking logic
+    });
+
+    // ---------------- HOI 标注任务相关（progress 2.0 列表 + 开始/结束按钮） ----------------
+
+    function loadHoiTasks() {
+        $.getJSON('/api/hoi_tasks', function(resp) {
+            const list = resp.tasks || [];
+            renderHoiList(list);
+        }).fail(function(xhr) {
+            console.error('Failed to load HOI tasks:', xhr.responseJSON || xhr.statusText);
+            $('#hoi-status').text('加载待标注列表失败');
+        });
+    }
+
+    function renderHoiList(list) {
+        const container = $('#hoi-video-list');
+        container.empty();
+
+        if (!list.length) {
+            container.append('<div style="padding: 8px 10px; font-size: 13px; color: #666;">暂无 progress=2.0 的视频</div>');
+            return;
+        }
+
+        list.forEach(function(rec, idx) {
+            const fileName = rec.file_name || rec.file_path || 'unknown';
+            const objectCategory = rec.object_category || '-';
+            const sf = rec.session_folder || '';
+
+            const item = $(`
+                <div class="hoi-item" data-session-folder="${sf}"
+                     style="padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 13px; background: #fafafa;">
+                    <div style="font-weight: 600; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        ${fileName}
+                    </div>
+                    <div style="font-size: 12px; color: #777; display: flex; justify-content: space-between; gap: 6px;">
+                        <span>Obj: ${objectCategory}</span>
+                        <span style="max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${sf}</span>
+                    </div>
+                </div>
+            `);
+
+            item.on('click', function() {
+                selectedSessionFolder = sf;
+                $('#hoi-video-list .hoi-item').css('background', '#fafafa');
+                $(this).css('background', '#e5e9ff');
+                $('#hoi-status').text(`已选择：${fileName}`);
+            });
+
+            container.append(item);
+        });
+    }
+
+    $('#hoi-search').on('input', function() {
+        const q = $(this).val().trim().toLowerCase();
+        $('#hoi-video-list .hoi-item').each(function() {
+            const text = $(this).text().toLowerCase();
+            $(this).toggle(text.indexOf(q) !== -1);
+        });
+    });
+
+    $('#btn-hoi-start').on('click', function() {
+        if (!selectedSessionFolder) {
+            $('#hoi-status').text('请先在左侧选择一个视频');
+            return;
+        }
+        $('#hoi-status').text('正在加载视频与场景数据...');
+        $.ajax({
+            url: '/api/hoi_start',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ session_folder: selectedSessionFolder }),
+            success: function(resp) {
+                currentSessionFolder = selectedSessionFolder;
+                $('#hoi-status').text('加载成功，正在刷新视频与场景...');
+                // 刷新元数据与 3D mesh
+                fetchMetadata();
+                loadMesh();
+            },
+            error: function(xhr) {
+                const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+                $('#hoi-status').text('开始标注失败：' + msg);
+            }
+        });
+    });
+
+    $('#btn-hoi-finish').on('click', function() {
+        if (!currentSessionFolder) {
+            $('#hoi-status').text('当前没有正在标注的视频');
+            return;
+        }
+        $('#hoi-status').text('正在结束标注并释放该视频...');
+        $.ajax({
+            url: '/api/hoi_finish',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ session_folder: currentSessionFolder }),
+            success: function(resp) {
+                $('#hoi-status').text('已结束标注，未完成的视频已恢复为 progress=2.0');
+                currentSessionFolder = null;
+                // 重新加载待标注列表
+                loadHoiTasks();
+            },
+            error: function(xhr) {
+                const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+                $('#hoi-status').text('结束标注失败：' + msg);
+            }
+        });
     });
     
     // Scale slider debounce timer

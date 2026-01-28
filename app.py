@@ -5,6 +5,7 @@ import json
 import argparse
 import traceback
 import numpy as np
+from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 import open3d as o3d
 from io import BytesIO
@@ -12,11 +13,9 @@ from threading import Lock
 from copy import deepcopy
 try:
     from solver.kp_use_new import kp_use_new
-    from solver.utils.hoi_utils import update_hand_pose
 except ImportError:
-    print("Could not import kp_use_new or update_hand_pose")
+    print("Could not import kp_use_new")
     kp_use_new = None
-    update_hand_pose = None
 
 # Add CoTracker to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'co-tracker'))
@@ -48,7 +47,224 @@ COTRACKER_LOCK = Lock()
 TRACKED_POINTS = {}
 SCENE_DATA = None
 
+# --- HOI 标注任务 / upload_records 管理 ---
 
+# 4d_preprocess_debug 目录（make_hoi.py 所在目录）
+PREPROCESS_DIR = Path(__file__).resolve().parent.parent / "4d_preprocess_debug"
+UPLOAD_RECORDS_PATH = PREPROCESS_DIR / "upload_records.json"
+
+# 当前这台机器“锁定”的待标注任务（annotation_progress: 2.0 -> 2.1）
+HOI_TASKS = []
+
+
+def _resolve_session_path(p: str) -> Path:
+    """
+    将 upload_records.json 里的 session_folder 解析为绝对路径。
+    行为尽量与 4d_preprocess_debug/make_hoi.py 中 _resolve_path 保持一致。
+    """
+    if not isinstance(p, str) or not p:
+        return Path("")
+    if p.startswith("./"):
+        return (PREPROCESS_DIR / p[2:]).resolve()
+    if p.startswith("tiktok_data/"):
+        return (PREPROCESS_DIR / p).resolve()
+    return Path(p).expanduser().resolve()
+
+
+def _load_upload_records() -> list:
+    if not UPLOAD_RECORDS_PATH.exists():
+        raise FileNotFoundError(f"upload_records.json not found: {UPLOAD_RECORDS_PATH}")
+    with UPLOAD_RECORDS_PATH.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError("upload_records.json must be a list")
+    return data
+
+
+def _write_upload_records(records: list) -> None:
+    tmp_path = UPLOAD_RECORDS_PATH.with_suffix(".json.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(records, f, indent=4, ensure_ascii=False)
+    tmp_path.replace(UPLOAD_RECORDS_PATH)
+
+
+def _init_hoi_tasks() -> None:
+    """
+    启动 app 时：
+    - 清理历史遗留的 2.1 锁（根据是否已有 kp_record_merged.json 决定回退为 2.0 或升级为 3.0）
+    - 读取 upload_records.json
+    - 找出 annotation_progress == 2.0 的记录，加入 HOI_TASKS（仅作展示，不修改进度）
+    """
+    global HOI_TASKS
+    if not UPLOAD_RECORDS_PATH.exists():
+        print(f"upload_records.json not found at {UPLOAD_RECORDS_PATH}, skip HOI task init")
+        return
+
+    # 先清理历史 2.1 锁
+    cleaned = _reset_unfinished_hoi_locks()
+    if cleaned > 0:
+        print(f"Reset {cleaned} unfinished HOI locks from 2.1 to 2.0/3.0")
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json: {e}")
+        return
+
+    tasks = []
+    for rec in records:
+        try:
+            prog = float(rec.get("annotation_progress", 0))
+        except Exception:
+            prog = 0.0
+        if prog == 2.0:
+            tasks.append(rec)
+
+    HOI_TASKS = tasks
+
+
+def _update_hoi_progress_for_video_dir(video_dir: str, finished: bool) -> None:
+    """
+    根据 video_dir 更新对应记录的 annotation_progress：
+    - 若 finished=True  -> 3.0（标注完成）
+    - 若 finished=False -> 2.0（未标，恢复可被再次领取）
+    匹配逻辑：以解析后的绝对路径比较 session_folder 与 video_dir。
+    """
+    if not UPLOAD_RECORDS_PATH.exists():
+        return
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json when updating progress: {e}")
+        return
+
+    target_path = Path(video_dir).resolve()
+    changed = False
+
+    for rec in records:
+        sf = rec.get("session_folder", "")
+        if not sf:
+            continue
+        sf_path = _resolve_session_path(sf)
+        if sf_path == target_path:
+            rec["annotation_progress"] = 3.0 if finished else 2.0
+            changed = True
+            break
+
+    if changed:
+        try:
+            _write_upload_records(records)
+            print(
+                f"Set annotation_progress to {3.0 if finished else 2.0} "
+                f"for session_folder matching {target_path}"
+            )
+        except Exception as e:
+            print(f"Failed to write upload_records.json when updating progress: {e}")
+
+
+def _reset_unfinished_hoi_locks() -> int:
+    """
+    将所有 annotation_progress == 2.1 的记录检查一遍：
+    - 若 session_folder 下已存在 kp_record_merged.json -> 置为 3.0
+    - 否则 -> 置为 2.0
+    返回本次修改的记录数量。
+    """
+    if not UPLOAD_RECORDS_PATH.exists():
+        return 0
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json when resetting locks: {e}")
+        return 0
+
+    changed = False
+    updated_count = 0
+
+    for rec in records:
+        try:
+            prog = float(rec.get("annotation_progress", 0))
+        except Exception:
+            continue
+        if prog != 2.1:
+            continue
+
+        sf = rec.get("session_folder", "")
+        if not sf:
+            continue
+        sf_path = _resolve_session_path(sf)
+        kp_merged = sf_path / "kp_record_merged.json"
+        if kp_merged.exists():
+            rec["annotation_progress"] = 3.0
+        else:
+            rec["annotation_progress"] = 2.0
+        changed = True
+        updated_count += 1
+
+    if changed:
+        try:
+            _write_upload_records(records)
+        except Exception as e:
+            print(f"Failed to write upload_records.json when resetting locks: {e}")
+            return 0
+
+    return updated_count
+
+
+def _load_video_session(video_dir: str) -> bool:
+    """
+    根据给定的 video_dir 加载对应的视频与场景数据：
+    - 设置 VIDEO_PATH / OBJ_PATH
+    - 打开 CAP 并加载所有帧到内存
+    - 初始化 CoTracker
+    - 构建 SCENE_DATA 并加载 SMPL-X / motion / obj_poses / meshes
+    - 准备 MESH_DATA 供前端初始 3D 视图使用
+    """
+    global VIDEO_PATH, OBJ_PATH, CAP, MESH_DATA, SCENE_DATA, VIDEO_FRAMES, VIDEO_FRAMES_ENCODED, VIDEO_FPS, VIDEO_TOTAL_FRAMES
+
+    video_dir = str(video_dir)
+    VIDEO_PATH = os.path.join(video_dir, "video.mp4")
+    OBJ_PATH = os.path.join(video_dir, "obj_org.obj")
+
+    # 释放旧的视频句柄
+    if CAP is not None:
+        try:
+            CAP.release()
+        except Exception:
+            pass
+    CAP = None
+    VIDEO_FRAMES = []
+    VIDEO_FRAMES_ENCODED = []
+    VIDEO_FPS = 30
+    VIDEO_TOTAL_FRAMES = 0
+    MESH_DATA = None
+    SCENE_DATA = None
+
+    if not os.path.exists(VIDEO_PATH):
+        print(f"Warning: Video not found at {VIDEO_PATH}")
+        return False
+
+    CAP = cv2.VideoCapture(VIDEO_PATH)
+    if not CAP.isOpened():
+        print(f"Failed to open video: {VIDEO_PATH}")
+        CAP = None
+        return False
+
+    print(f"Video loaded: {VIDEO_PATH}")
+    load_video_frames()
+    init_cotracker()
+
+    # Initialize Scene Data
+    SCENE_DATA = SceneData(video_dir)
+    SCENE_DATA.load()
+
+    if os.path.exists(OBJ_PATH) and SCENE_DATA is not None and SCENE_DATA.obj_mesh_org is not None:
+        MESH_DATA = load_mesh(SCENE_DATA.obj_mesh_org)
+    else:
+        print(f"Warning: Mesh not found or obj_mesh_org is None for video_dir {video_dir}")
+
+    return True
 
 def preprocess_obj_sample(obj_org, object_poses, seq_length):
     """Preprocess object mesh for all frames, following app_new.py logic"""
@@ -598,6 +814,156 @@ def get_metadata():
         'video_name': os.path.basename(VIDEO_PATH),
         'obj_name': os.path.basename(OBJ_PATH)
     })
+
+
+@app.route('/api/hoi_tasks')
+def get_hoi_tasks():
+    """
+    返回当前 annotation_progress == 2.0 的所有 HOI 待标注任务列表。
+    每次调用都会从 upload_records.json 重新读取，保证结果实时。
+    """
+    if not UPLOAD_RECORDS_PATH.exists():
+        return jsonify({'tasks': []})
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json in get_hoi_tasks: {e}")
+        return jsonify({'tasks': []})
+
+    tasks = []
+    for rec in records:
+        try:
+            prog = float(rec.get("annotation_progress", 0))
+        except Exception:
+            prog = 0.0
+        if prog == 2.0:
+            tasks.append(rec)
+
+    return jsonify({'tasks': tasks})
+
+
+@app.route('/api/hoi_start', methods=['POST'])
+def hoi_start():
+    """
+    开始标注某个 session：
+    - 前端提供 session_folder（与 upload_records.json 中一致的字符串）
+    - 仅允许从 annotation_progress == 2.0 切换到 2.1
+    - 同时在后端加载对应 video_dir（video.mp4 / obj_org.obj / motion 等）
+    """
+    payload = request.get_json(silent=True) or {}
+    session_folder = payload.get('session_folder')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'error': 'session_folder is required'}), 400
+
+    if not UPLOAD_RECORDS_PATH.exists():
+        return jsonify({'error': 'upload_records.json not found'}), 500
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json in hoi_start: {e}")
+        return jsonify({'error': 'failed to load upload_records.json'}), 500
+
+    target_rec = None
+    for rec in records:
+        if str(rec.get('session_folder', '')) == session_folder:
+            target_rec = rec
+            break
+
+    if target_rec is None:
+        return jsonify({'error': f'session_folder not found: {session_folder}'}), 404
+
+    try:
+        prog = float(target_rec.get('annotation_progress', 0))
+    except Exception:
+        prog = 0.0
+
+    if prog != 2.0:
+        return jsonify({'error': f'annotation_progress must be 2.0 to start, got {prog}'}), 400
+
+    # 解析为绝对路径
+    video_dir_path = _resolve_session_path(session_folder)
+    if not video_dir_path.exists():
+        return jsonify({'error': f'video_dir not exists: {video_dir_path}'}), 404
+
+    # 尝试加载该 session 对应的数据
+    ok = _load_video_session(str(video_dir_path))
+    if not ok:
+        return jsonify({'error': f'failed to load video session at {video_dir_path}'}), 500
+
+    # 若加载成功，再将 progress 2.0 -> 2.1，避免锁死无效样本
+    target_rec['annotation_progress'] = 2.1
+    try:
+        _write_upload_records(records)
+    except Exception as e:
+        print(f"Failed to write upload_records.json in hoi_start: {e}")
+        return jsonify({'error': 'failed to update upload_records.json'}), 500
+
+    return jsonify({
+        'status': 'success',
+        'video_dir': str(video_dir_path),
+        'record': target_rec,
+    })
+
+
+@app.route('/api/hoi_finish', methods=['POST'])
+def hoi_finish():
+    """
+    结束当前标注：
+    - 用于“放弃/结束”当前标注但不调用 save_merged_annotations 的场景
+    - 将指定 session_folder 的 annotation_progress 从 2.1 改回 2.0
+     （如果已经被 save_merged_annotations 改为 3.0，则不会修改）
+    """
+    payload = request.get_json(silent=True) or {}
+    session_folder = payload.get('session_folder')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'error': 'session_folder is required'}), 400
+
+    if not UPLOAD_RECORDS_PATH.exists():
+        return jsonify({'error': 'upload_records.json not found'}), 500
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json in hoi_finish: {e}")
+        return jsonify({'error': 'failed to load upload_records.json'}), 500
+
+    target_rec = None
+    for rec in records:
+        if str(rec.get('session_folder', '')) == session_folder:
+            target_rec = rec
+            break
+
+    if target_rec is None:
+        return jsonify({'error': f'session_folder not found: {session_folder}'}), 404
+
+    try:
+        prog = float(target_rec.get('annotation_progress', 0))
+    except Exception:
+        prog = 0.0
+
+    if prog == 2.1:
+        target_rec['annotation_progress'] = 2.0
+        try:
+            _write_upload_records(records)
+        except Exception as e:
+            print(f"Failed to write upload_records.json in hoi_finish: {e}")
+            return jsonify({'error': 'failed to update upload_records.json'}), 500
+
+    return jsonify({'status': 'success', 'annotation_progress': target_rec.get('annotation_progress')})
+
+
+@app.route('/api/finalize_hoi_sessions', methods=['POST'])
+def finalize_hoi_sessions():
+    """
+    扫描所有 annotation_progress == 2.1 的记录：
+    - 若对应 session_folder 下存在 kp_record_merged.json，则改为 3.0
+    - 否则改回 2.0
+    用于一次性“收尾”，保证未完成的任务不会一直被锁住。
+    """
+    updated = _reset_unfinished_hoi_locks()
+    return jsonify({'status': 'success', 'updated_records': updated})
 
 @app.route('/api/frame/<int:frame_idx>')
 def get_frame(frame_idx):
@@ -1380,6 +1746,9 @@ def save_merged_annotations():
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
 
+        # 标注合并成功后，将对应视频的 annotation_progress 置为 3.0
+        _update_hoi_progress_for_video_dir(video_dir, finished=True)
+
         return jsonify({
             'status': 'success',
             'path': out_path,
@@ -1443,25 +1812,6 @@ def run_optimization():
     ], dtype=np.float32)
     
     body_params = SCENE_DATA.motion_data['smpl_params_incam']
-
-    # Update hand poses if update_hand_pose is available
-    if update_hand_pose:
-        print("Updating hand poses...")
-        hand_poses = SCENE_DATA.hand_poses
-        for i in range(SCENE_DATA.total_frames):
-            if str(i) not in hand_poses:
-                hand_poses[str(i)] = {}
-            
-            try:
-                bp, lh, rh = update_hand_pose(hand_poses, body_params["global_orient"], body_params["body_pose"], i)
-                body_params["body_pose"][i] = bp.squeeze()
-                hand_poses[str(i)]["left_hand"] = lh
-                hand_poses[str(i)]["right_hand"] = rh
-            except KeyError as e:
-                print(f"Warning: Missing key {e} in hand_poses for frame {i}, skipping hand update.")
-            except Exception as e:
-                print(f"Warning: Error updating hand pose for frame {i}: {e}")
-        print("Hand poses updated.")
     
     # Prepare sampled meshes
     # Use SCENE_DATA.obj_mesh_org which is already simplified
@@ -1613,12 +1963,12 @@ if __name__ == '__main__':
         else:
             print(f"Warning: Video not found at {VIDEO_PATH}")
             
-        if os.path.exists(OBJ_PATH):
-            # MESH_DATA = load_mesh(OBJ_PATH)
-            MESH_DATA=load_mesh(SCENE_DATA.obj_mesh_org)
-        else:
-            print(f"Warning: Mesh not found at {OBJ_PATH}")
+        # 复用通用的 session 加载逻辑，确保与 /api/hoi_start 行为一致
+        _load_video_session(args.video_dir)
     else:
         print("No video_dir provided. Start with --video_dir to load data.")
+
+    # 启动 Flask 之前初始化 HOI 待标注任务列表（不会修改 2.0，只清理历史 2.1）
+    _init_hoi_tasks()
 
     app.run(debug=True, host='0.0.0.0', port=5010, use_reloader=False)

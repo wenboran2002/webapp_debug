@@ -13,19 +13,37 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style_extra.css') }}">
 </head>
 <body>
-    <div class="container">
-        <div class="header" style="text-align: center; margin-bottom: 30px; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);">
-            <h1 style="margin: 0 0 15px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-size: 32px; font-weight: 700;">4DHOI Annotation Tool</h1>
-            <div id="file-info" style="font-size: 14px; color: #555; margin-top: 10px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
-                <span id="info-video" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Video: -</span>
-                <span id="info-object" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Object: -</span>
-                <span id="info-res" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Res: -</span>
-                <span id="info-fps" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">FPS: -</span>
-                <span id="info-frames" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Frames: -</span>
+    <div class="container" style="display: flex; gap: 20px; align-items: flex-start;">
+        <!-- 左侧：待标注视频列表 -->
+        <div id="hoi-sidebar" style="width: 260px; background: rgba(255,255,255,0.96); border-radius: 12px; box-shadow: 0 4px 18px rgba(0,0,0,0.08); padding: 16px; max-height: calc(100vh - 40px); overflow-y: auto;">
+            <h3 style="margin: 0 0 10px 0; font-size: 18px; font-weight: 700; color: #333;">待标注视频 (progress=2.0)</h3>
+            <div style="margin-bottom: 10px;">
+                <input id="hoi-search" type="text" placeholder="按对象 / 文件名搜索" style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid #ddd; font-size: 13px;">
+            </div>
+            <div id="hoi-video-list" style="border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fafafa; max-height: 60vh; overflow-y: auto;">
+                <!-- 由 JS 填充 -->
+            </div>
+            <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+                <button id="btn-hoi-start" class="btn-control" style="width: 100%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; font-weight: 600;">开始标注</button>
+                <button id="btn-hoi-finish" class="btn-control" style="width: 100%; background: linear-gradient(135deg, #6c757d 0%, #343a40 100%); color: #fff; font-weight: 600;">结束标注（释放）</button>
+                <div id="hoi-status" style="font-size: 12px; color: #666; min-height: 18px;"></div>
             </div>
         </div>
 
-        <div class="video-panel">
+        <!-- 右侧：原有视频与 3D 标注区域 -->
+        <div style="flex: 1; min-width: 0;">
+            <div class="header" style="text-align: center; margin-bottom: 30px; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);">
+                <h1 style="margin: 0 0 15px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-size: 32px; font-weight: 700;">4DHOI Annotation Tool</h1>
+                <div id="file-info" style="font-size: 14px; color: #555; margin-top: 10px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                    <span id="info-video" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Video: -</span>
+                    <span id="info-object" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Object: -</span>
+                    <span id="info-res" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Res: -</span>
+                    <span id="info-fps" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">FPS: -</span>
+                    <span id="info-frames" style="padding: 5px 12px; background: #f0f0f0; border-radius: 6px;">Frames: -</span>
+                </div>
+            </div>
+
+            <div class="video-panel">
             <div id="video-container" style="position: relative;">
                 <img id="video-frame" src="" alt="Video Frame" style="display: block; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges; width: 100%; height: auto;">
                 <!-- 2D tracking overlay for main video -->
@@ -61,6 +79,7 @@
                 <button id="save-annotation-main" class="btn-annotate" style="background: linear-gradient(135deg, #ff7e5f 0%, #feb47b 100%); box-shadow: 0 6px 18px rgba(255, 126, 95, 0.55); border-radius: 999px; padding: 10px 26px; font-size: 15px; font-weight: 700; letter-spacing: 0.03em;">
                     Save All Frames
                 </button>
+            </div>
             </div>
         </div>
     </div>
