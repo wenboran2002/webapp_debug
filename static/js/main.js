@@ -1551,17 +1551,23 @@ $(document).ready(function() {
                 videoFrame.src = frameSrc;
             }
 
-            // 如果标注弹窗打开，则同步更新 2D 视图的图片
-            if (modalVideoFrame && $('#annotation-modal').is(':visible')) {
-                modalVideoFrame.src = frameSrc;
-                // 每次图片加载完成后重绘 2D 叠加（追踪点等）
-                modalVideoFrame.onload = function() {
-                    update2DOverlay();
-                    this.onload = null;
-                };
+            // 如果标注弹窗打开，则同步更新 2D 视图的图片和右侧参考帧
+            if ($('#annotation-modal').is(':visible')) {
+                if (modalVideoFrame) {
+                    modalVideoFrame.src = frameSrc;
+                    modalVideoFrame.onload = function() {
+                        update2DOverlay();
+                        this.onload = null;
+                    };
+                }
+                const modalRefFrame = document.getElementById('modal-reference-frame');
+                if (modalRefFrame) modalRefFrame.src = frameSrc;
             }
 
             $('#frame-display').text('Frame: ' + currentFrame);
+            if ($('#annotation-modal').is(':visible')) {
+                $('#modal-frame-idx').text(currentFrame);
+            }
             if (!isDragging) {
                 $('#frame-slider').val(currentFrame);
             }
@@ -1629,9 +1635,11 @@ $(document).ready(function() {
             }
         }
         
-        // Update modal video frame (only if modal is open)
-        if (modalVideoFrame && $('#annotation-modal').is(':visible')) {
-            modalVideoFrame.src = frameSrc;
+        // Update modal video frame and reference frame (only if modal is open)
+        if ($('#annotation-modal').is(':visible')) {
+            if (modalVideoFrame) modalVideoFrame.src = frameSrc;
+            const modalRefFrame = document.getElementById('modal-reference-frame');
+            if (modalRefFrame) modalRefFrame.src = frameSrc;
         }
 
         // 更新主视频和 2D 视图上的叠加（追踪点、pending 点）
