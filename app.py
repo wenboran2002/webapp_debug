@@ -11,6 +11,11 @@ import open3d as o3d
 from io import BytesIO
 from threading import Lock
 from copy import deepcopy
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 try:
     from solver.kp_use_new import kp_use_new
 except ImportError:
@@ -32,6 +37,33 @@ except ImportError as e:
 
 app = Flask(__name__, static_folder='static')
 
+# 从 config.yaml 加载常量（缺失时使用默认值）
+def _load_config():
+    defaults = {
+        'mesh': {
+            'obj_decimation_target_faces': 30000,
+            'obj_decimate_if_vertices_above': 5000,
+        },
+        'server': {'host': '0.0.0.0', 'port': 5010},
+        'video': {'default_fps': 30},
+    }
+    config_path = Path(__file__).resolve().parent / 'config.yaml'
+    if yaml is not None and config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                for k, v in defaults.items():
+                    if k in loaded and isinstance(loaded[k], dict):
+                        defaults[k] = {**defaults[k], **loaded[k]}
+                    elif k in loaded:
+                        defaults[k] = loaded[k]
+        except Exception as e:
+            print(f"Warning: could not load config.yaml: {e}")
+    return defaults
+
+CONFIG = _load_config()
+
 # Global variables
 VIDEO_PATH = ""
 OBJ_PATH = ""
@@ -40,7 +72,7 @@ CAP_LOCK = Lock()
 MESH_DATA = None # {vertices: [], faces: []}
 VIDEO_FRAMES = [] # List of RGB numpy arrays
 VIDEO_FRAMES_ENCODED = [] # List of pre-encoded JPEG bytes
-VIDEO_FPS = 30
+VIDEO_FPS = CONFIG['video']['default_fps']
 VIDEO_TOTAL_FRAMES = 0
 COTRACKER_MODEL = None
 COTRACKER_LOCK = Lock()
@@ -236,7 +268,7 @@ def _load_video_session(video_dir: str) -> bool:
     CAP = None
     VIDEO_FRAMES = []
     VIDEO_FRAMES_ENCODED = []
-    VIDEO_FPS = 30
+    VIDEO_FPS = CONFIG['video']['default_fps']
     VIDEO_TOTAL_FRAMES = 0
     MESH_DATA = None
     SCENE_DATA = None
@@ -404,9 +436,11 @@ class SceneData:
             if os.path.exists(obj_mesh_path):
                 self.obj_mesh_raw = o3d.io.read_triangle_mesh(obj_mesh_path)
                 self.obj_mesh_org = deepcopy(self.obj_mesh_raw)
-                # Simplify for performance
-                if len(self.obj_mesh_org.vertices) > 5000:
-                    self.obj_mesh_org = self.obj_mesh_org.simplify_quadric_decimation(target_number_of_triangles=10000)
+                # Simplify for performance (params from config.yaml)
+                target_faces = CONFIG['mesh']['obj_decimation_target_faces']
+                vert_threshold = CONFIG['mesh']['obj_decimate_if_vertices_above']
+                if len(self.obj_mesh_org.vertices) > vert_threshold:
+                    self.obj_mesh_org = self.obj_mesh_org.simplify_quadric_decimation(target_number_of_triangles=target_faces)
             else:
                 print(f"Object mesh not found at {obj_mesh_path}")
             
@@ -1971,4 +2005,4 @@ if __name__ == '__main__':
     # 启动 Flask 之前初始化 HOI 待标注任务列表（不会修改 2.0，只清理历史 2.1）
     _init_hoi_tasks()
 
-    app.run(debug=True, host='0.0.0.0', port=5010, use_reloader=False)
+    app.run(debug=True, host=CONFIG['server']['host'], port=CONFIG['server']['port'], use_reloader=False)

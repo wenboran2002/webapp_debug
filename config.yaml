@@ -1,0 +1,17 @@
+# Webapp 常量配置（修改后需重启服务生效）
+
+# 物体网格减面（用于 3D 标注与优化）
+mesh:
+  # 减面目标三角面数；越大越细腻，前端/优化越慢
+  obj_decimation_target_faces: 30000
+  # 顶点数超过此值才做减面，否则保持原 mesh
+  obj_decimate_if_vertices_above: 5000
+
+# 服务
+server:
+  host: "0.0.0.0"
+  port: 5010
+
+# 视频（元数据缺失时的默认值）
+video:
+  default_fps: 30
