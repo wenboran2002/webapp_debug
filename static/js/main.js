@@ -48,9 +48,10 @@ $(document).ready(function() {
     const scaleViewerState = {
         baseHuman: null,
         baseObject: null,
+        baseScaleFactor: 1.0,
         layout: null,
         baseDiag: 1,
-        transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 },
+        transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0 },
         activeMode: null,
         lastMouse: null
     };
@@ -1177,7 +1178,7 @@ $(document).ready(function() {
             if (['g', 'r', 's'].includes(key)) {
                 scaleViewerState.activeMode = key;
                 scaleViewerState.lastMouse = null;
-                const label = key === 's' ? 'Scale (applies immediately)' : (key === 'g' ? 'Move (preview only)' : 'Rotate (preview only)');
+                const label = key === 's' ? 'Scale (applies immediately, no reload)' : (key === 'g' ? 'Move (preview only, screen plane)' : 'Rotate (preview only)');
                 $('#scale-status').text(`${label}: move mouse to adjust; press key again to switch/stop.`);
             }
         });
@@ -1207,6 +1208,7 @@ $(document).ready(function() {
             const translateStep = diag * 0.0025;
 
             if (scaleViewerState.activeMode === 'g') {
+                // Screen-space follow: shift origin by cursor delta in view plane
                 scaleViewerState.transform.tx += dx * translateStep;
                 scaleViewerState.transform.ty -= dy * translateStep;
                 updateScaleViewerPlot();
@@ -1270,13 +1272,25 @@ $(document).ready(function() {
             success: function(resp) {
                 const applied = parseFloat(resp.scale_factor) || scale;
                 lastAppliedScale = applied;
+                // Update local base geometry without reloading scene to avoid lag
+                if (scaleViewerState.baseObject && scaleViewerState.baseScaleFactor > 0) {
+                    const ratio = applied / scaleViewerState.baseScaleFactor;
+                    scaleViewerState.baseObject = {
+                        x: scaleViewerState.baseObject.x.map(v => v * ratio),
+                        y: scaleViewerState.baseObject.y.map(v => v * ratio),
+                        z: scaleViewerState.baseObject.z.map(v => v * ratio),
+                        i: scaleViewerState.baseObject.i,
+                        j: scaleViewerState.baseObject.j,
+                        k: scaleViewerState.baseObject.k
+                    };
+                    scaleViewerState.baseScaleFactor = applied;
+                }
                 $('#slider-scale-factor').val(applied);
                 $('#input-scale-factor').val(applied.toFixed(2));
                 $('#slider-scale-value').text(applied.toFixed(2));
                 $('#scale-status').text('Scale applied: ' + applied.toFixed(2) + 'x');
                 $('#btn-apply-scale').prop('disabled', false).text('Apply Scale');
-                // Reload viewer with updated object mesh, based on the same frame
-                loadScaleViewer(currentFrame);
+                updateScaleViewerPlot();
             },
             error: function(xhr) {
                 $('#scale-status').text('Error: ' + (xhr.responseJSON?.error || 'Failed to apply scale'));
@@ -1325,6 +1339,7 @@ $(document).ready(function() {
             // Cache base geometry for preview-only transforms
             scaleViewerState.baseHuman = human;
             scaleViewerState.baseObject = object;
+            scaleViewerState.baseScaleFactor = lastAppliedScale || 1.0;
             scaleViewerState.baseDiag = computeObjectDiag(object);
             scaleViewerState.layout = {
                 scene: {
