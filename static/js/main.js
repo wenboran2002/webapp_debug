@@ -61,6 +61,9 @@ $(document).ready(function() {
         }
     };
 
+    // Frame cache-busting key to avoid stale frames across sessions
+    let frameCacheKey = Date.now();
+
     // 2D Annotation variables
     let pending2DPoint = null; // last clicked 2D point (for legacy use / highlighting)
     let pending2DPoints = {};  // { objIdx: { x, y, displayX, displayY, frame } }
@@ -102,7 +105,7 @@ $(document).ready(function() {
                     // 图像加载完成后加入缓存
                     preloadCache.set(frameNum, img);
                 };
-                img.src = 'api/frame/' + frameNum;
+                img.src = 'api/frame/' + frameNum + '?v=' + frameCacheKey;
             });
         }
     
@@ -1020,7 +1023,7 @@ $(document).ready(function() {
                 // Cache the loaded image
                 preloadCache.set(frameNum, img);
             };
-            img.src = 'api/frame/' + frameNum + '?t=' + Date.now();
+            img.src = 'api/frame/' + frameNum + '?v=' + frameCacheKey;
         });
     }
     
@@ -1111,6 +1114,8 @@ $(document).ready(function() {
             data: JSON.stringify({ session_folder: selectedSessionFolder }),
             success: function(resp) {
                 currentSessionFolder = selectedSessionFolder;
+            frameCacheKey = Date.now(); // bust cached frames for new session
+            preloadCache.clear();
                 hasCheckedScale = false; // force scale review for each new session
                 lastAppliedScale = 1.0;
                 resetScaleViewerTransform();
@@ -1125,42 +1130,6 @@ $(document).ready(function() {
                 $('#hoi-status').text('开始标注失败：' + msg);
                 $('#scene-status').text('Scene: error – ' + msg);
             }
-        });
-    });
-
-    $('#btn-hoi-finish').on('click', function() {
-        if (!currentUser) {
-            $('#hoi-status').text('请先登录再结束标注');
-            return;
-        }
-        if (!currentSessionFolder) {
-            $('#hoi-status').text('当前没有正在标注的视频');
-            return;
-        }
-        $('#hoi-status').text('正在保存并结束标注...');
-
-        // 先保存合并，再释放锁
-        saveMergedAnnotations(function(ok) {
-            if (!ok) {
-                $('#hoi-status').text('保存失败，请检查后重试');
-                return;
-            }
-
-            $.ajax({
-                url: 'api/hoi_finish',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({ session_folder: currentSessionFolder }),
-                success: function() {
-                    $('#hoi-status').text('已保存并结束标注，视频释放');
-                    currentSessionFolder = null;
-                    loadHoiTasks();
-                },
-                error: function(xhr) {
-                    const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
-                    $('#hoi-status').text('结束标注失败：' + msg);
-                }
-            });
         });
     });
 
@@ -1930,7 +1899,7 @@ $(document).ready(function() {
 
             const videoFrame = $('#video-frame')[0];
             const modalVideoFrame = $('#modal-video-frame')[0];
-            const frameSrc = 'api/frame/' + currentFrame;
+            const frameSrc = 'api/frame/' + currentFrame + '?v=' + frameCacheKey;
 
             // 主视频区域：直接切换图片，不做任何变暗/过渡效果，避免闪烁
             if (videoFrame) {
@@ -1990,7 +1959,7 @@ $(document).ready(function() {
         }
         
         // 使用稳定 URL，交给浏览器和后端缓存处理
-        const frameSrc = 'api/frame/' + currentFrame;
+        const frameSrc = 'api/frame/' + currentFrame + '?v=' + frameCacheKey;
         
         // Update video frame images when用户跳帧/暂停时查看
         const videoFrame = $('#video-frame')[0];
