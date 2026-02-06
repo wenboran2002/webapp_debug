@@ -189,7 +189,7 @@ $(document).ready(function() {
         loadHoiTasks();
     });
 
-    // Optimization Button Handler
+    // Optimization Button Handler（仅优化到当前帧）
     $('#btn-optimize').click(function() {
         const btn = $(this);
         btn.prop('disabled', true);
@@ -202,13 +202,14 @@ $(document).ready(function() {
                 return;
             }
             
-            // 2. Run optimization
+            // 2. Run optimization limited to current frame
             $.ajax({
-            url: 'api/run_optimization',
+                url: 'api/run_optimization',
                 type: 'POST',
                 contentType: 'application/json',
                 data: JSON.stringify({
-                    frame_idx: currentFrame
+                    frame_idx: currentFrame,
+                    last_frame: currentFrame
                 }),
                 success: function(response) {
                     if (response.status === 'success') {
@@ -1136,21 +1137,43 @@ $(document).ready(function() {
             $('#hoi-status').text('当前没有正在标注的视频');
             return;
         }
-        $('#hoi-status').text('正在结束标注并释放该视频...');
-        $.ajax({
-            url: 'api/hoi_finish',
-            type: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify({ session_folder: currentSessionFolder }),
-            success: function(resp) {
-                $('#hoi-status').text('已结束标注，未完成的视频已恢复为 progress=2.0');
-                currentSessionFolder = null;
-                // 重新加载待标注列表
-                loadHoiTasks();
-            },
-            error: function(xhr) {
-                const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
-                $('#hoi-status').text('结束标注失败：' + msg);
+        $('#hoi-status').text('正在保存并结束标注...');
+
+        // 先保存合并，再释放锁
+        saveMergedAnnotations(function(ok) {
+            if (!ok) {
+                $('#hoi-status').text('保存失败，请检查后重试');
+                return;
+            }
+
+            $.ajax({
+                url: 'api/hoi_finish',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ session_folder: currentSessionFolder }),
+                success: function() {
+                    $('#hoi-status').text('已保存并结束标注，视频释放');
+                    currentSessionFolder = null;
+                    loadHoiTasks();
+                },
+                error: function(xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+                    $('#hoi-status').text('结束标注失败：' + msg);
+                }
+            });
+        });
+    });
+
+    // Quick save button
+    $('#btn-save-merged').on('click', function() {
+        const btn = $(this);
+        btn.prop('disabled', true);
+        saveMergedAnnotations(function(ok) {
+            btn.prop('disabled', false);
+            if (ok) {
+                $('#hoi-status').text('标注已保存');
+            } else {
+                $('#hoi-status').text('保存失败，请重试');
             }
         });
     });

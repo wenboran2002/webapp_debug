@@ -2001,8 +2001,13 @@ def run_optimization():
     data = request.get_json(silent=True) or {}
     try:
         current_frame = int(data.get('frame_idx', 0))
-    except:
+    except Exception:
         current_frame = 0
+    try:
+        last_frame_req = data.get('last_frame', current_frame)
+        last_frame = int(last_frame_req)
+    except Exception:
+        last_frame = current_frame
     
     # 1. Construct path to kp_record_merged.json
     video_dir = SCENE_DATA.video_dir
@@ -2017,8 +2022,13 @@ def run_optimization():
     
     try:
         start_frame = merged.get("start_frame_index", 0)
-    except:
+    except Exception:
         start_frame = 0
+
+    # Clamp optimization window to requested frame (inclusive) to avoid long runs
+    end_frame = min(SCENE_DATA.total_frames, max(last_frame, current_frame) + 1)
+    if end_frame <= start_frame:
+        end_frame = min(SCENE_DATA.total_frames, start_frame + 1)
         
     # 2. Prepare arguments
     part_kp_path = os.path.join(app.root_path, 'solver', 'data', 'part_kp.json')
@@ -2054,7 +2064,7 @@ def run_optimization():
 
     # Since we are passing World Space meshes, we must set centers_depth to ZERO
     # to prevent double-transformation in the solver
-    centers_depth = np.zeros((SCENE_DATA.total_frames, 3))
+    centers_depth = np.zeros((end_frame - start_frame, 3))
 
     try:
         if kp_use_new is None:
@@ -2079,7 +2089,7 @@ def run_optimization():
             human_part=human_part,
             K=torch.from_numpy(K),
             start_frame=start_frame,
-            end_frame=SCENE_DATA.total_frames,
+            end_frame=end_frame,
             video_dir=video_dir,
             is_static_object=False,
             kp_record_path=kp_record_path

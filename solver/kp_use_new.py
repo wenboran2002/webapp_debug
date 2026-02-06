@@ -88,8 +88,9 @@ def kp_use_new(
             point_indices = [p[0] for p in annotation["2D_keypoint"]]
             image_coords = [np.array(p[1]) for p in annotation["2D_keypoint"]]
             object_verts = np.array(deepcopy(obj_orgs[current_idx].vertices))[point_indices]
+            depth_idx = min(current_idx, len(centers_depth) - 1)
             transformed_verts = apply_initial_transform_to_points(
-                object_verts, centers_depth[current_idx + start_frame]
+                object_verts, centers_depth[depth_idx]
             )                              
 
             object_points.append(transformed_verts.astype(np.float32))
@@ -126,11 +127,12 @@ def kp_use_new(
     for i in frames_to_optimize:
                                                                                                                
         obj_src_idx = best_frame if is_static_object else i
+        depth_idx = min(obj_src_idx, len(centers_depth) - 1)
         obj_init = apply_initial_transform_to_mesh(
-            obj_orgs[obj_src_idx], centers_depth[min(obj_src_idx + start_frame, len(centers_depth)-1)]
+            obj_orgs[obj_src_idx], centers_depth[depth_idx]
         )
         obj_init_sample = apply_initial_transform_to_mesh(
-            sampled_orgs[obj_src_idx], centers_depth[min(obj_src_idx + start_frame, len(centers_depth)-1)]
+            sampled_orgs[obj_src_idx], centers_depth[depth_idx]
         )
         result = hoi_solver.solve_hoi(
             obj_init,
