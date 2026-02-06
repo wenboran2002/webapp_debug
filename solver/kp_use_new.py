@@ -3,16 +3,15 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-from .optimizer_part import VideoBodyObjectOptimizer
 from .hoi_solver import HOISolver
 from .kp_common import (
-    model,
     resource_path,
     apply_initial_transform_to_mesh,
     apply_initial_transform_to_points,
 )
 from copy import deepcopy
 from typing import Optional
+
 def kp_use_new(
     output,
     hand_poses,
@@ -75,10 +74,8 @@ def kp_use_new(
 
     object_points_idx = []
     body_points_idx = []
-    pairs_2d = []
     object_points = []
     image_points = []
-    body_kp_name = []
     hoi_solver = HOISolver(model_folder=resource_path('video_optimizer/smpl_models/SMPLX_NEUTRAL.npz'))
 
     for i in tqdm(range(seq_length)):
@@ -106,11 +103,9 @@ def kp_use_new(
                 continue
             if k not in human_part:
                 continue
-            body_kp_name.append(k)
             human_part_index = list(human_part.keys()).index(k)
             object_idx[human_part_index] = [annot_index, 1]
 
-        pairs_2d.append(annotation.get("2D_keypoint", []))
         body_idx = [v['index'] for v in human_part.values()]
         object_points_idx.append(object_idx)
         body_points_idx.append(body_idx)
@@ -123,7 +118,6 @@ def kp_use_new(
         if frames_to_optimize[-1] != seq_length - 1:
             frames_to_optimize.append(seq_length - 1)
 
-    optimized_results = {}
     icp_transform_matrix = []
     joint_mapping = json.load(open(resource_path('video_optimizer/data/joint_reflect.json')))
 
@@ -172,37 +166,5 @@ def kp_use_new(
         for i in range(seq_length):
             obj_orgs[i] = first_frame_obj
             sampled_orgs[i] = first_frame_sampled
-
-    optimizer_args = {
-        "body_params": body_params,
-        "global_body_params": global_body_params,
-        "hand_params": hand_poses,
-        "object_points_idx": object_points_idx,
-        "body_points_idx": body_points_idx,
-        "body_kp_name" : body_kp_name,
-        "pairs_2d": pairs_2d,
-        "object_meshes": obj_orgs,
-        "sampled_obj_meshes": sampled_orgs,
-        "centers_depth": centers_depth,
-        "icp_transform_matrix": icp_transform_matrix,
-        "smpl_model": model,
-        "start_frame": start_frame,
-        "end_frame": end_frame,
-        "video_dir": video_dir,
-        "lr": 0.1,
-        "is_static_object": is_static_object,
-        "best_frame": best_frame if is_static_object else None,
-    }
-    optimizer = VideoBodyObjectOptimizer(**optimizer_args)
-    optimizer.optimize(steps=30, print_every=5)
-    optimized_params = optimizer.get_optimized_parameters()
-    optimizer.create_visualization_video(
-        os.path.join(video_dir, "optimized_frames"),
-        K=K,
-        video_path=os.path.join(video_dir, "optimize_video.mp4"),
-        clear=False
-    )
-    body_params, hand_poses, R_finals, t_finals = optimizer.get_optimize_result()
-
     # Webapp expects (body_params, icp_transforms) as return values.
     return body_params, icp_transform_matrix

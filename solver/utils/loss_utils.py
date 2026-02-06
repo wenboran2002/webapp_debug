@@ -16,7 +16,10 @@ from math import exp
 import numpy as np
 from sdf import *
 import torch.nn as nn
-import neural_renderer.neural_renderer as nr
+try:
+    import neural_renderer.neural_renderer as nr
+except ImportError:
+    nr = None  # Optional dependency; only needed for silhouette rendering
 import torchvision.transforms.functional as TF
 from pytorch3d.ops import knn_points
 from PIL import Image
@@ -286,6 +289,9 @@ def compute_collision_loss(hverts, overts, hfaces, ofaces, h_weight=10.0, thresh
 
 
 def compute_mask_loss(width, height, video_dir, hverts, overts, hfaces, ofaces, mask_weight=1.5, edge_weight=1e-3, frame_idx=None):
+    if nr is None:
+        raise ImportError("neural_renderer is required for compute_mask_loss but is not installed")
+
     downsample_height = height // 4
     downsample_width = width // 4
     downsample_image_size = (downsample_height, downsample_width)
