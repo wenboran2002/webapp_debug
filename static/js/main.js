@@ -51,7 +51,7 @@ $(document).ready(function() {
         baseScaleFactor: 1.0,
         layout: null,
         baseDiag: 1,
-        transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0 },
+        transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, viewRoll: 0 },
         activeMode: null,
         lastMouse: null,
         camera: {
@@ -1080,7 +1080,7 @@ $(document).ready(function() {
     let scaleSliderDebounceTimer = null;
 
     function resetScaleViewerTransform() {
-        scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0 };
+        scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, viewRoll: 0 };
         scaleViewerState.activeMode = null;
         scaleViewerState.lastMouse = null;
     }
@@ -1140,11 +1140,21 @@ $(document).ready(function() {
 
     function transformObjectMesh(baseObj) {
         if (!baseObj) return { x: [], y: [], z: [], i: [], j: [], k: [] };
-        const { tx, ty, tz, yaw, pitch, roll } = scaleViewerState.transform;
+        const { tx, ty, tz, yaw, pitch, roll, viewRoll } = scaleViewerState.transform;
 
         const cy = Math.cos(yaw); const sy = Math.sin(yaw);
         const cp = Math.cos(pitch); const sp = Math.sin(pitch);
         const cr = Math.cos(roll); const sr = Math.sin(roll);
+
+        // View-axis rotation (Rodrigues) using current camera view vector
+        const cam = scaleViewerState.camera || { eye: { x: 1, y: 1, z: 1 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } };
+        const viewAxis = normalizeVec([
+            cam.center.x - cam.eye.x,
+            cam.center.y - cam.eye.y,
+            cam.center.z - cam.eye.z
+        ]);
+        const cosV = Math.cos(viewRoll);
+        const sinV = Math.sin(viewRoll);
 
         // Rotation order: Rz(roll) * Rx(pitch) * Ry(yaw) — lightweight but sufficient for preview
         const outX = new Array(baseObj.x.length);
@@ -1168,9 +1178,22 @@ $(document).ready(function() {
             const xRoll = cr * xYaw - sr * yPitch;
             const yRoll = sr * xYaw + cr * yPitch;
 
-            outX[idx] = xRoll + tx;
-            outY[idx] = yRoll + ty;
-            outZ[idx] = zPitch + tz;
+            // View-axis rotation applied after base rotations
+            const kx = viewAxis[0];
+            const ky = viewAxis[1];
+            const kz = viewAxis[2];
+            const dot = kx * xRoll + ky * yRoll + kz * zPitch;
+            const crossX = ky * zPitch - kz * yRoll;
+            const crossY = kz * xRoll - kx * zPitch;
+            const crossZ = kx * yRoll - ky * xRoll;
+
+            const xView = xRoll * cosV + crossX * sinV + kx * dot * (1 - cosV);
+            const yView = yRoll * cosV + crossY * sinV + ky * dot * (1 - cosV);
+            const zView = zPitch * cosV + crossZ * sinV + kz * dot * (1 - cosV);
+
+            outX[idx] = xView + tx;
+            outY[idx] = yView + ty;
+            outZ[idx] = zView + tz;
         }
 
         return { x: outX, y: outY, z: outZ, i: baseObj.i, j: baseObj.j, k: baseObj.k };
@@ -1214,7 +1237,7 @@ $(document).ready(function() {
         if (scaleViewerControlsBound) return;
 
         const plotEl = document.getElementById('scale-viewer');
-        if (plotEl) {
+        if (plotEl && plotEl.on) {
             plotEl.on('plotly_relayout', function(e) {
                 const cam = e?.['scene.camera'];
                 if (cam) {
@@ -1270,8 +1293,9 @@ $(document).ready(function() {
             }
 
             if (scaleViewerState.activeMode === 'r') {
-                scaleViewerState.transform.yaw += dx * 0.01;
-                scaleViewerState.transform.pitch += dy * 0.01;
+                // Rotate around view axis: map mouse delta to roll about camera view
+                const delta = (-dx + -dy) * 0.01; // right/clockwise, down/clockwise for screen coords
+                scaleViewerState.transform.viewRoll += delta;
                 updateScaleViewerPlot();
                 return;
             }
