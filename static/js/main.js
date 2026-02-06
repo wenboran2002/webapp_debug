@@ -41,6 +41,20 @@ $(document).ready(function() {
     let mainJointCoords = null;
     let buttonNames = null;
 
+    // Scale-check state
+    let hasCheckedScale = false; // forces user to open the Check Scale view before annotating
+    let scaleViewerControlsBound = false;
+    const scaleViewerState = {
+        baseHuman: null,
+        baseObject: null,
+        layout: null,
+        baseDiag: 1,
+        transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 },
+        activeMode: null,
+        dragging: false,
+        lastMouse: { x: 0, y: 0 }
+    };
+
     // 2D Annotation variables
     let pending2DPoint = null; // last clicked 2D point (for legacy use / highlighting)
     let pending2DPoints = {};  // { objIdx: { x, y, displayX, displayY, frame } }
@@ -844,6 +858,10 @@ $(document).ready(function() {
     });
 
     function openModal() {
+        if (!hasCheckedScale) {
+            alert('Please open "Check Scale" and review the object before annotating.');
+            return;
+        }
         // Pause video if playing
         if (isPlaying) {
             togglePlay();
@@ -1011,6 +1029,8 @@ $(document).ready(function() {
             data: JSON.stringify({ session_folder: selectedSessionFolder }),
             success: function(resp) {
                 currentSessionFolder = selectedSessionFolder;
+                hasCheckedScale = false; // force scale review for each new session
+                resetScaleViewerTransform();
                 $('#hoi-status').text('加载成功，正在刷新视频与场景...');
                 $('#scene-status').text('Scene: loading metadata & first frame...');
                 // 刷新元数据与 3D mesh
@@ -1052,6 +1072,167 @@ $(document).ready(function() {
     // Scale slider debounce timer
     let scaleSliderDebounceTimer = null;
 
+    function resetScaleViewerTransform() {
+        scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 };
+        scaleViewerState.activeMode = null;
+        scaleViewerState.dragging = false;
+    }
+
+    function computeObjectDiag(obj) {
+        if (!obj || !obj.x || obj.x.length === 0) return 1;
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        for (let i = 0; i < obj.x.length; i++) {
+            const x = obj.x[i];
+            const y = obj.y[i];
+            const z = obj.z[i];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+        const dx = maxX - minX;
+        const dy = maxY - minY;
+        const dz = maxZ - minZ;
+        return Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
+    }
+
+    function transformObjectMesh(baseObj) {
+        if (!baseObj) return { x: [], y: [], z: [], i: [], j: [], k: [] };
+        const { tx, ty, tz, yaw, pitch, roll, scale } = scaleViewerState.transform;
+
+        const cy = Math.cos(yaw); const sy = Math.sin(yaw);
+        const cp = Math.cos(pitch); const sp = Math.sin(pitch);
+        const cr = Math.cos(roll); const sr = Math.sin(roll);
+
+        // Rotation order: Rz(roll) * Rx(pitch) * Ry(yaw) — lightweight but sufficient for preview
+        const outX = new Array(baseObj.x.length);
+        const outY = new Array(baseObj.y.length);
+        const outZ = new Array(baseObj.z.length);
+
+        for (let idx = 0; idx < baseObj.x.length; idx++) {
+            // Scale first
+            let x = baseObj.x[idx] * scale;
+            let y = baseObj.y[idx] * scale;
+            let z = baseObj.z[idx] * scale;
+
+            // yaw (Y axis)
+            const xYaw = cy * x + sy * z;
+            const zYaw = -sy * x + cy * z;
+
+            // pitch (X axis)
+            const yPitch = cp * y - sp * zYaw;
+            const zPitch = sp * y + cp * zYaw;
+
+            // roll (Z axis)
+            const xRoll = cr * xYaw - sr * yPitch;
+            const yRoll = sr * xYaw + cr * yPitch;
+
+            outX[idx] = xRoll + tx;
+            outY[idx] = yRoll + ty;
+            outZ[idx] = zPitch + tz;
+        }
+
+        return { x: outX, y: outY, z: outZ, i: baseObj.i, j: baseObj.j, k: baseObj.k };
+    }
+
+    function updateScaleViewerPlot() {
+        if (!scaleViewerState.baseHuman || !scaleViewerState.baseObject) return;
+
+        const humanTrace = {
+            type: 'mesh3d',
+            x: scaleViewerState.baseHuman.x,
+            y: scaleViewerState.baseHuman.y,
+            z: scaleViewerState.baseHuman.z,
+            i: scaleViewerState.baseHuman.i,
+            j: scaleViewerState.baseHuman.j,
+            k: scaleViewerState.baseHuman.k,
+            color: 'pink', opacity: 1.0, name: 'Human'
+        };
+
+        const transformed = transformObjectMesh(scaleViewerState.baseObject);
+        const objectTrace = {
+            type: 'mesh3d',
+            x: transformed.x, y: transformed.y, z: transformed.z,
+            i: transformed.i, j: transformed.j, k: transformed.k,
+            color: 'lightblue', opacity: 0.8, name: 'Object (preview)'
+        };
+
+        const layout = scaleViewerState.layout || {
+            scene: { aspectmode: 'data', dragmode: 'orbit' },
+            margin: { l: 0, r: 0, b: 0, t: 0 },
+            showlegend: true
+        };
+        scaleViewerState.layout = layout;
+
+        Plotly.react('scale-viewer', [humanTrace, objectTrace], layout, { responsive: true });
+    }
+
+    function bindScaleViewerControls() {
+        if (scaleViewerControlsBound) return;
+
+        $(document).on('keydown', function(e) {
+            if (!$('#scale-modal').is(':visible')) return;
+            const key = e.key.toLowerCase();
+            if (['g', 'r', 's'].includes(key)) {
+                scaleViewerState.activeMode = key;
+                scaleViewerState.dragging = false;
+                $('#scale-status').text(`Preview: ${key.toUpperCase()} + drag to adjust (visual only)`);
+            }
+        });
+
+        $(document).on('keyup', function(e) {
+            const key = e.key.toLowerCase();
+            if (['g', 'r', 's'].includes(key)) {
+                scaleViewerState.activeMode = null;
+                scaleViewerState.dragging = false;
+            }
+        });
+
+        $('#scale-viewer').on('mousedown', function(e) {
+            if (!$('#scale-modal').is(':visible')) return;
+            if (!scaleViewerState.activeMode) return;
+            scaleViewerState.dragging = true;
+            scaleViewerState.lastMouse = { x: e.clientX, y: e.clientY };
+            e.preventDefault();
+        });
+
+        $(document).on('mouseup', function() {
+            scaleViewerState.dragging = false;
+        });
+
+        $(document).on('mousemove', function(e) {
+            if (!$('#scale-modal').is(':visible')) return;
+            if (!scaleViewerState.dragging || !scaleViewerState.activeMode) return;
+
+            const dx = e.clientX - scaleViewerState.lastMouse.x;
+            const dy = e.clientY - scaleViewerState.lastMouse.y;
+            scaleViewerState.lastMouse = { x: e.clientX, y: e.clientY };
+
+            const diag = scaleViewerState.baseDiag || 1;
+            const translateStep = diag * 0.0025;
+
+            switch (scaleViewerState.activeMode) {
+                case 'g': // translate in screen plane
+                    scaleViewerState.transform.tx += dx * translateStep;
+                    scaleViewerState.transform.ty -= dy * translateStep;
+                    break;
+                case 'r': // rotate: horizontal -> yaw, vertical -> pitch
+                    scaleViewerState.transform.yaw += dx * 0.01;
+                    scaleViewerState.transform.pitch += dy * 0.01;
+                    break;
+                case 's': // visual scale only
+                    const factor = 1 + dx * 0.003;
+                    scaleViewerState.transform.scale = Math.min(5, Math.max(0.2, scaleViewerState.transform.scale * factor));
+                    break;
+            }
+
+            updateScaleViewerPlot();
+        });
+
+        scaleViewerControlsBound = true;
+    }
+
     // Function to apply scale (extracted for reuse)
     function applyScale(scale, updateSlider = true) {
         if (!(scale > 0)) {
@@ -1088,6 +1269,7 @@ $(document).ready(function() {
     }
 
     $('#btn-check-scale').click(function() {
+        hasCheckedScale = true;
         $('#scale-frame-idx').text(currentFrame);
         $('#scale-modal').show();
         
@@ -1122,24 +1304,11 @@ $(document).ready(function() {
         $.get('api/scene_data/' + frameIdx, function(data) {
             const human = data.human;
             const object = data.object;
-
-            const humanTrace = {
-                type: 'mesh3d',
-                x: human.x, y: human.y, z: human.z,
-                i: human.i, j: human.j, k: human.k,
-                color: 'pink', opacity: 1.0,
-                name: 'Human'
-            };
-
-            const objectTrace = {
-                type: 'mesh3d',
-                x: object.x, y: object.y, z: object.z,
-                i: object.i, j: object.j, k: object.k,
-                color: 'lightblue', opacity: 0.8,
-                name: 'Object'
-            };
-
-            const layout = {
+            // Cache base geometry for preview-only transforms
+            scaleViewerState.baseHuman = human;
+            scaleViewerState.baseObject = object;
+            scaleViewerState.baseDiag = computeObjectDiag(object);
+            scaleViewerState.layout = {
                 scene: {
                     aspectmode: 'data',
                     dragmode: 'orbit'
@@ -1147,8 +1316,12 @@ $(document).ready(function() {
                 margin: { l: 0, r: 0, b: 0, t: 0 },
                 showlegend: true
             };
+            resetScaleViewerTransform();
+            updateScaleViewerPlot();
+            bindScaleViewerControls();
 
-            Plotly.newPlot('scale-viewer', [humanTrace, objectTrace], layout, { responsive: true });
+            // Show the current frame image alongside the 3D preview
+            $('#scale-frame-image').attr('src', 'api/frame/' + frameIdx + '?t=' + Date.now());
 
         }).fail(function(xhr) {
             alert('Error loading scene data: ' + (xhr.responseJSON?.error || 'Unknown error'));
