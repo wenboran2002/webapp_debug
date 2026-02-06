@@ -53,7 +53,12 @@ $(document).ready(function() {
         baseDiag: 1,
         transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0 },
         activeMode: null,
-        lastMouse: null
+        lastMouse: null,
+        camera: {
+            eye: { x: 1.25, y: 1.25, z: 1.25 },
+            up: { x: 0, y: 0, z: 1 },
+            center: { x: 0, y: 0, z: 0 }
+        }
     };
 
     // 2D Annotation variables
@@ -1075,9 +1080,43 @@ $(document).ready(function() {
     let scaleSliderDebounceTimer = null;
 
     function resetScaleViewerTransform() {
-        scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 };
+        scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0 };
         scaleViewerState.activeMode = null;
         scaleViewerState.lastMouse = null;
+    }
+
+    function normalizeVec(v) {
+        const n = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) || 1;
+        return [v[0]/n, v[1]/n, v[2]/n];
+    }
+
+    function crossVec(a, b) {
+        return [
+            a[1]*b[2] - a[2]*b[1],
+            a[2]*b[0] - a[0]*b[2],
+            a[0]*b[1] - a[1]*b[0]
+        ];
+    }
+
+    function applyViewAlignedTranslation(dx, dy, step) {
+        const cam = scaleViewerState.camera || {};
+        const eye = cam.eye || { x: 1, y: 1, z: 1 };
+        const center = cam.center || { x: 0, y: 0, z: 0 };
+        const up = cam.up || { x: 0, y: 0, z: 1 };
+
+        const view = normalizeVec([center.x - eye.x, center.y - eye.y, center.z - eye.z]);
+        const upv = normalizeVec([up.x, up.y, up.z]);
+        const right = normalizeVec(crossVec(upv, view));
+        const screenUp = normalizeVec(crossVec(view, right));
+
+        // Screen coords: x right, y down → use -dy for up direction
+        const tx = right[0] * dx * step + screenUp[0] * (-dy * step);
+        const ty = right[1] * dx * step + screenUp[1] * (-dy * step);
+        const tz = right[2] * dx * step + screenUp[2] * (-dy * step);
+
+        scaleViewerState.transform.tx += tx;
+        scaleViewerState.transform.ty += ty;
+        scaleViewerState.transform.tz += tz;
     }
 
     function computeObjectDiag(obj) {
@@ -1164,6 +1203,8 @@ $(document).ready(function() {
             margin: { l: 0, r: 0, b: 0, t: 0 },
             showlegend: true
         };
+        layout.scene = layout.scene || {};
+        layout.scene.camera = scaleViewerState.camera || layout.scene.camera;
         scaleViewerState.layout = layout;
 
         Plotly.react('scale-viewer', [humanTrace, objectTrace], layout, { responsive: true });
@@ -1172,13 +1213,27 @@ $(document).ready(function() {
     function bindScaleViewerControls() {
         if (scaleViewerControlsBound) return;
 
+        const plotEl = document.getElementById('scale-viewer');
+        if (plotEl) {
+            plotEl.on('plotly_relayout', function(e) {
+                const cam = e?.['scene.camera'];
+                if (cam) {
+                    scaleViewerState.camera = {
+                        eye: cam.eye || scaleViewerState.camera.eye,
+                        up: cam.up || scaleViewerState.camera.up,
+                        center: cam.center || scaleViewerState.camera.center
+                    };
+                }
+            });
+        }
+
         $(document).on('keydown', function(e) {
             if (!$('#scale-modal').is(':visible')) return;
             const key = e.key.toLowerCase();
             if (['g', 'r', 's'].includes(key)) {
                 scaleViewerState.activeMode = key;
                 scaleViewerState.lastMouse = null;
-                const label = key === 's' ? 'Scale (applies immediately, no reload)' : (key === 'g' ? 'Move (preview only, screen plane)' : 'Rotate (preview only)');
+                const label = key === 's' ? 'Scale (applies immediately, no reload)' : (key === 'g' ? 'Move (preview only, view-aligned plane)' : 'Rotate (preview only)');
                 $('#scale-status').text(`${label}: move mouse to adjust; press key again to switch/stop.`);
             }
         });
@@ -1208,9 +1263,8 @@ $(document).ready(function() {
             const translateStep = diag * 0.0025;
 
             if (scaleViewerState.activeMode === 'g') {
-                // Screen-space follow: shift origin by cursor delta in view plane
-                scaleViewerState.transform.tx += dx * translateStep;
-                scaleViewerState.transform.ty -= dy * translateStep;
+                // View-plane translation: map mouse delta to camera-aligned right/up axes
+                applyViewAlignedTranslation(dx, dy, translateStep);
                 updateScaleViewerPlot();
                 return;
             }
