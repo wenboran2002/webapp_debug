@@ -1110,9 +1110,9 @@ $(document).ready(function() {
         const screenUp = normalizeVec(crossVec(view, right));
 
         // Screen coords: x right, y down → use -dy for up direction
-        const tx = right[0] * dx * step + screenUp[0] * (-dy * step);
-        const ty = right[1] * dx * step + screenUp[1] * (-dy * step);
-        const tz = right[2] * dx * step + screenUp[2] * (-dy * step);
+        const tx = right[0] * (-dx * step) + screenUp[0] * (-dy * step);
+        const ty = right[1] * (-dx * step) + screenUp[1] * (-dy * step);
+        const tz = right[2] * (-dx * step) + screenUp[2] * (-dy * step);
 
         scaleViewerState.transform.tx += tx;
         scaleViewerState.transform.ty += ty;
