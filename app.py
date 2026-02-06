@@ -392,25 +392,53 @@ class SceneData:
             else:
                 print(f"SMPL-X model not found at {model_path}")
             
-            # Load Motion Data
+            # Load Motion Data (prefer result_hand.pt) and extract hand poses directly
             motion_path = os.path.join(self.video_dir, 'motion', 'result_hand.pt')
+            fallback_motion_path = os.path.join(self.video_dir, 'motion', 'result.pt')
             if os.path.exists(motion_path):
                 self.motion_data = torch.load(motion_path, map_location=self.device)
-                # Get total frames from motion data
+            elif os.path.exists(fallback_motion_path):
+                self.motion_data = torch.load(fallback_motion_path, map_location=self.device)
+                print(f"Motion data not found at {motion_path}, using fallback {fallback_motion_path}")
+            else:
+                self.motion_data = None
+                print(f"Motion data not found at {motion_path} or {fallback_motion_path}")
+
+            if self.motion_data is not None:
                 params = self.motion_data.get('smpl_params_incam', {})
                 if 'body_pose' in params:
                     self.total_frames = len(params['body_pose'])
-            else:
-                print(f"Motion data not found at {motion_path}")
-                
-            # Load Hand Poses (optional)
-            hand_pose_path = os.path.join(self.video_dir, 'motion', 'hand_pose.json')
-            if os.path.exists(hand_pose_path):
-                with open(hand_pose_path, 'r') as f:
-                    self.hand_poses = json.load(f)
+
+                # Extract hand poses from motion data instead of hand_pose.json
+                left_hand = params.get('left_hand_pose')
+                right_hand = params.get('right_hand_pose')
+                self.hand_poses = {}
+                if left_hand is not None and right_hand is not None:
+                    t_len = min(len(left_hand), len(right_hand))
+                    for i in range(t_len):
+                        lh = left_hand[i]
+                        rh = right_hand[i]
+                        if torch.is_tensor(lh):
+                            lh = lh.cpu().numpy().tolist()
+                        if torch.is_tensor(rh):
+                            rh = rh.cpu().numpy().tolist()
+                        self.hand_poses[str(i)] = {
+                            "left_hand": lh,
+                            "right_hand": rh,
+                        }
+                    if t_len > 0:
+                        print(f"Loaded hand poses from result_hand.pt: {t_len} frames")
+                if not self.hand_poses:
+                    # Fallback: zero hand poses matching total_frames
+                    zero_count = self.total_frames if self.total_frames > 0 else 0
+                    for i in range(zero_count):
+                        self.hand_poses[str(i)] = {
+                            "left_hand": [[0.0, 0.0, 0.0]] * 15,
+                            "right_hand": [[0.0, 0.0, 0.0]] * 15,
+                        }
+                    print(f"Hand poses missing in result_hand.pt; using zeros for {zero_count} frames")
             else:
                 self.hand_poses = {}
-                print(f"Hand pose file not found at {hand_pose_path}, using defaults")
                 
             # Load Object Poses
             # Try align folder first, then fall back to output folder
