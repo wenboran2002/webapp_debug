@@ -115,12 +115,79 @@ $(document).ready(function() {
     // 当前选中的 session_folder（来自 upload_records.json）
     let currentSessionFolder = null;
     let selectedSessionFolder = null;
+    let currentUser = null;
+
+    function setUserUI(user) {
+        currentUser = user;
+        if (user && user.username) {
+            $('#user-name').text(user.display_name || user.username);
+            $('#btn-login').hide();
+            $('#btn-logout').show();
+        } else {
+            $('#user-name').text('未登录');
+            $('#btn-login').show();
+            $('#btn-logout').hide();
+        }
+    }
+
+    function fetchMe() {
+        return $.getJSON('api/me').done(function(resp) {
+            if (resp.ok && resp.logged_in) {
+                setUserUI(resp.user);
+            } else {
+                setUserUI(null);
+            }
+        }).fail(function() {
+            setUserUI(null);
+        });
+    }
+
+    function promptLogin(cb) {
+        const name = window.prompt('请输入用户名用于登录');
+        if (!name) {
+            if (cb) cb(false);
+            return;
+        }
+        $.ajax({
+            url: 'api/login',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ username: name.trim() })
+        }).done(function(resp) {
+            setUserUI({ username: resp.username, display_name: resp.username });
+            if (cb) cb(true);
+        }).fail(function(xhr) {
+            const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+            alert('登录失败: ' + msg);
+            if (cb) cb(false);
+        });
+    }
+
+    $('#btn-login').on('click', function() {
+        promptLogin(function(ok) {
+            if (ok) {
+                loadHoiTasks();
+            }
+        });
+    });
+
+    $('#btn-logout').on('click', function() {
+        $.post('api/logout').always(function() {
+            setUserUI(null);
+            currentSessionFolder = null;
+            selectedSessionFolder = null;
+            $('#hoi-status').text('已退出');
+            loadHoiTasks();
+        });
+    });
 
     // Initialize
-    loadJointTree();
-    loadHumanSelectorData();
-    // 先加载 HOI 列表，用户选择并点击“开始标注”后，再拉取 metadata / mesh
-    loadHoiTasks();
+    fetchMe().always(function() {
+        loadJointTree();
+        loadHumanSelectorData();
+        // 先加载 HOI 列表，用户选择并点击“开始标注”后，再拉取 metadata / mesh
+        loadHoiTasks();
+    });
 
     // Optimization Button Handler
     $('#btn-optimize').click(function() {
@@ -1022,6 +1089,14 @@ $(document).ready(function() {
     });
 
     $('#btn-hoi-start').on('click', function() {
+        if (!currentUser) {
+            promptLogin(function(ok) {
+                if (ok) {
+                    $('#hoi-status').text('已登录，请重新点击开始标注');
+                }
+            });
+            return;
+        }
         if (!selectedSessionFolder) {
             $('#hoi-status').text('请先在左侧选择一个视频');
             return;
@@ -1053,6 +1128,10 @@ $(document).ready(function() {
     });
 
     $('#btn-hoi-finish').on('click', function() {
+        if (!currentUser) {
+            $('#hoi-status').text('请先登录再结束标注');
+            return;
+        }
         if (!currentSessionFolder) {
             $('#hoi-status').text('当前没有正在标注的视频');
             return;
