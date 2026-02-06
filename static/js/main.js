@@ -44,6 +44,7 @@ $(document).ready(function() {
     // Scale-check state
     let hasCheckedScale = false; // forces user to open the Check Scale view before annotating
     let scaleViewerControlsBound = false;
+    let lastAppliedScale = 1.0;
     const scaleViewerState = {
         baseHuman: null,
         baseObject: null,
@@ -51,8 +52,7 @@ $(document).ready(function() {
         baseDiag: 1,
         transform: { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 },
         activeMode: null,
-        dragging: false,
-        lastMouse: { x: 0, y: 0 }
+        lastMouse: null
     };
 
     // 2D Annotation variables
@@ -1030,6 +1030,7 @@ $(document).ready(function() {
             success: function(resp) {
                 currentSessionFolder = selectedSessionFolder;
                 hasCheckedScale = false; // force scale review for each new session
+                lastAppliedScale = 1.0;
                 resetScaleViewerTransform();
                 $('#hoi-status').text('加载成功，正在刷新视频与场景...');
                 $('#scene-status').text('Scene: loading metadata & first frame...');
@@ -1075,7 +1076,7 @@ $(document).ready(function() {
     function resetScaleViewerTransform() {
         scaleViewerState.transform = { tx: 0, ty: 0, tz: 0, yaw: 0, pitch: 0, roll: 0, scale: 1 };
         scaleViewerState.activeMode = null;
-        scaleViewerState.dragging = false;
+        scaleViewerState.lastMouse = null;
     }
 
     function computeObjectDiag(obj) {
@@ -1099,7 +1100,7 @@ $(document).ready(function() {
 
     function transformObjectMesh(baseObj) {
         if (!baseObj) return { x: [], y: [], z: [], i: [], j: [], k: [] };
-        const { tx, ty, tz, yaw, pitch, roll, scale } = scaleViewerState.transform;
+        const { tx, ty, tz, yaw, pitch, roll } = scaleViewerState.transform;
 
         const cy = Math.cos(yaw); const sy = Math.sin(yaw);
         const cp = Math.cos(pitch); const sp = Math.sin(pitch);
@@ -1111,10 +1112,9 @@ $(document).ready(function() {
         const outZ = new Array(baseObj.z.length);
 
         for (let idx = 0; idx < baseObj.x.length; idx++) {
-            // Scale first
-            let x = baseObj.x[idx] * scale;
-            let y = baseObj.y[idx] * scale;
-            let z = baseObj.z[idx] * scale;
+            let x = baseObj.x[idx];
+            let y = baseObj.y[idx];
+            let z = baseObj.z[idx];
 
             // yaw (Y axis)
             const xYaw = cy * x + sy * z;
@@ -1176,8 +1176,9 @@ $(document).ready(function() {
             const key = e.key.toLowerCase();
             if (['g', 'r', 's'].includes(key)) {
                 scaleViewerState.activeMode = key;
-                scaleViewerState.dragging = false;
-                $('#scale-status').text(`Preview: ${key.toUpperCase()} + drag to adjust (visual only)`);
+                scaleViewerState.lastMouse = null;
+                const label = key === 's' ? 'Scale (applies immediately)' : (key === 'g' ? 'Move (preview only)' : 'Rotate (preview only)');
+                $('#scale-status').text(`${label}: move mouse to adjust; press key again to switch/stop.`);
             }
         });
 
@@ -1185,25 +1186,18 @@ $(document).ready(function() {
             const key = e.key.toLowerCase();
             if (['g', 'r', 's'].includes(key)) {
                 scaleViewerState.activeMode = null;
-                scaleViewerState.dragging = false;
+                scaleViewerState.lastMouse = null;
             }
-        });
-
-        $('#scale-viewer').on('mousedown', function(e) {
-            if (!$('#scale-modal').is(':visible')) return;
-            if (!scaleViewerState.activeMode) return;
-            scaleViewerState.dragging = true;
-            scaleViewerState.lastMouse = { x: e.clientX, y: e.clientY };
-            e.preventDefault();
-        });
-
-        $(document).on('mouseup', function() {
-            scaleViewerState.dragging = false;
         });
 
         $(document).on('mousemove', function(e) {
             if (!$('#scale-modal').is(':visible')) return;
-            if (!scaleViewerState.dragging || !scaleViewerState.activeMode) return;
+            if (!scaleViewerState.activeMode) return;
+
+            if (!scaleViewerState.lastMouse) {
+                scaleViewerState.lastMouse = { x: e.clientX, y: e.clientY };
+                return;
+            }
 
             const dx = e.clientX - scaleViewerState.lastMouse.x;
             const dy = e.clientY - scaleViewerState.lastMouse.y;
@@ -1212,31 +1206,49 @@ $(document).ready(function() {
             const diag = scaleViewerState.baseDiag || 1;
             const translateStep = diag * 0.0025;
 
-            switch (scaleViewerState.activeMode) {
-                case 'g': // translate in screen plane
-                    scaleViewerState.transform.tx += dx * translateStep;
-                    scaleViewerState.transform.ty -= dy * translateStep;
-                    break;
-                case 'r': // rotate: horizontal -> yaw, vertical -> pitch
-                    scaleViewerState.transform.yaw += dx * 0.01;
-                    scaleViewerState.transform.pitch += dy * 0.01;
-                    break;
-                case 's': // visual scale only
-                    const factor = 1 + dx * 0.003;
-                    scaleViewerState.transform.scale = Math.min(5, Math.max(0.2, scaleViewerState.transform.scale * factor));
-                    break;
+            if (scaleViewerState.activeMode === 'g') {
+                scaleViewerState.transform.tx += dx * translateStep;
+                scaleViewerState.transform.ty -= dy * translateStep;
+                updateScaleViewerPlot();
+                return;
             }
 
-            updateScaleViewerPlot();
+            if (scaleViewerState.activeMode === 'r') {
+                scaleViewerState.transform.yaw += dx * 0.01;
+                scaleViewerState.transform.pitch += dy * 0.01;
+                updateScaleViewerPlot();
+                return;
+            }
+
+            if (scaleViewerState.activeMode === 's') {
+                const currentScale = parseFloat($('#slider-scale-factor').val()) || lastAppliedScale || 1.0;
+                const newScale = Math.max(0.1, Math.min(5, currentScale * (1 + dx * 0.003)));
+                $('#slider-scale-factor').val(newScale);
+                $('#input-scale-factor').val(newScale.toFixed(2));
+                $('#slider-scale-value').text(newScale.toFixed(2));
+
+                // Debounce backend apply so mouse move matches manual input effect
+                if (scaleSliderDebounceTimer) {
+                    clearTimeout(scaleSliderDebounceTimer);
+                }
+                scaleSliderDebounceTimer = setTimeout(function() {
+                    applyScale(newScale, false);
+                }, 200);
+            }
         });
 
         scaleViewerControlsBound = true;
     }
 
-    // Function to apply scale (extracted for reuse)
+    // Function to apply scale (updates backend; also used by mouse-scale gesture)
     function applyScale(scale, updateSlider = true) {
         if (!(scale > 0)) {
             $('#scale-status').text('Scale must be a positive number');
+            return;
+        }
+
+        // Skip if unchanged to reduce calls
+        if (Math.abs(scale - lastAppliedScale) < 1e-4) {
             return;
         }
 
@@ -1256,7 +1268,12 @@ $(document).ready(function() {
             contentType: 'application/json',
             data: JSON.stringify({ scale_factor: scale }),
             success: function(resp) {
-                $('#scale-status').text('Scale applied: ' + resp.scale_factor + 'x');
+                const applied = parseFloat(resp.scale_factor) || scale;
+                lastAppliedScale = applied;
+                $('#slider-scale-factor').val(applied);
+                $('#input-scale-factor').val(applied.toFixed(2));
+                $('#slider-scale-value').text(applied.toFixed(2));
+                $('#scale-status').text('Scale applied: ' + applied.toFixed(2) + 'x');
                 $('#btn-apply-scale').prop('disabled', false).text('Apply Scale');
                 // Reload viewer with updated object mesh, based on the same frame
                 loadScaleViewer(currentFrame);
@@ -1274,10 +1291,11 @@ $(document).ready(function() {
         $('#scale-modal').show();
         
         $('#scale-status').text('');
-        // Initialize slider and input with default value 1.0
-        $('#input-scale-factor').val('1.0');
-        $('#slider-scale-factor').val('1.0');
-        $('#slider-scale-value').text('1.00');
+        // Initialize slider and input with last applied value
+        const initScale = lastAppliedScale || 1.0;
+        $('#input-scale-factor').val(initScale.toFixed(2));
+        $('#slider-scale-factor').val(initScale);
+        $('#slider-scale-value').text(initScale.toFixed(2));
         loadScaleViewer(currentFrame);
     });
     
