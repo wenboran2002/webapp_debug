@@ -106,10 +106,9 @@ def visualize_imgs(render_pkg,viewpoint_cam,mask,mask_o,mask_h):
         f'./output/test_output/{viewpoint_cam.image_name}/render/{viewpoint_cam.image_name}_render_h.png',
         image_test_h)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    gt_image = viewpoint_cam.original_image.to(device)
-    gt_image_h = viewpoint_cam.original_image_h.to(device)
-    gt_image_o = viewpoint_cam.original_image_o.to(device)
+    gt_image = viewpoint_cam.original_image.cuda()
+    gt_image_h = viewpoint_cam.original_image_h.cuda()
+    gt_image_o = viewpoint_cam.original_image_o.cuda()
 
     bgr_image = gt_image.permute(1, 2, 0).detach().cpu().numpy() * 255
     bgr_image = cv2.cvtColor(bgr_image, cv2.COLOR_RGB2BGR)

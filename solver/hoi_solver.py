@@ -4,22 +4,17 @@ import numpy as np
 import open3d as o3d
 import json
 import os
-import sys
-# import trimesh
+import trimesh
 import time
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as R
 from .utils.hoi_utils import load_transformation_matrix
 from copy import deepcopy
 from .utils.icppnp import solve_weighted_priority
-from .utils.camera_utils import transform_to_global
+from .kp_common import resource_path
+from pathlib import Path
+from typing import Optional
 
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
 
 class HOISolver:
     def __init__(self, model_folder, device=None):
@@ -45,6 +40,11 @@ class HOISolver:
         mesh = o3d.geometry.TriangleMesh()
         mesh.vertices = o3d.utility.Vector3dVector(vertices)
         mesh.triangles = o3d.utility.Vector3iVector(faces.astype(np.int32))
+        mesh.compute_vertex_normals()
+        o3d.io.write_triangle_mesh(filename, mesh)
+        print(f"Saved mesh to {filename}")
+
+    def _save_o3d_mesh(self, mesh: o3d.geometry.TriangleMesh, filename: str) -> None:
         mesh.compute_vertex_normals()
         o3d.io.write_triangle_mesh(filename, mesh)
         print(f"Saved mesh to {filename}")
@@ -221,28 +221,43 @@ class HOISolver:
 
         return target_joints, constraint_joints
 
-    def solve_hoi(self, obj_init, body_params, global_body_params, i, start_frame, end_frame, hand_poses,
-                  object_points_idx, body_points_idx, object_points, image_points, joint_mapping, K=None,
-                  part_kp_file=resource_path("video_optimizer/data/part_kp.json"), save_meshes=False, all_mutiview_info=None, is_multiview=False):
+    def solve_hoi(
+        self,
+        obj_init,
+        obj_sample_init,
+        body_params,
+        global_body_params,
+        i,
+        start_frame,
+        end_frame,
+        hand_poses,
+        object_points_idx,
+        body_points_idx,
+        object_points,
+        image_points,
+        joint_mapping,
+        K=None,
+        T_ext=None,
+                  part_kp_file=resource_path("video_optimizer/data/part_kp.json"), save_meshes=False, debug_out_dir: Optional[str] = None, debug_prefix: Optional[str] = None):
         print("Starting HOI solving with direct inputs...")
 
-        body_pose = body_params["body_pose"][i + start_frame].reshape(1, -1).to(self.device)
-        global_orient = body_params["global_orient"][i + start_frame].reshape(1, 3).to(self.device)
-        shape = body_params["betas"][i + start_frame].reshape(1, -1).to(self.device)
-        transl = body_params["transl"][i + start_frame].reshape(1, -1).to(self.device)
-        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).to(self.device)
+        body_pose = body_params["body_pose"][i + start_frame].reshape(1, -1).cuda()
+        global_orient = body_params["global_orient"][i + start_frame].reshape(1, 3).cuda()
+        shape = body_params["betas"][i + start_frame].reshape(1, -1).cuda()
+        transl = body_params["transl"][i + start_frame].reshape(1, -1).cuda()
+        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).cuda()
         left_hand_pose = np.array(hand_poses[str(i + start_frame)]["left_hand"])
         right_hand_pose = np.array(hand_poses[str(i + start_frame)]["right_hand"])
 
         output = self.model(betas=shape,
                          body_pose=body_pose,
-                         left_hand_pose=torch.from_numpy(left_hand_pose).float().to(self.device),
-                         right_hand_pose=torch.from_numpy(right_hand_pose).float().to(self.device),
+                         left_hand_pose=torch.from_numpy(left_hand_pose).float().cuda(),
+                         right_hand_pose=torch.from_numpy(right_hand_pose).float().cuda(),
                          jaw_pose=zero_pose,
                          leye_pose=zero_pose,
                          reye_pose=zero_pose,
                          global_orient=global_orient,
-                         expression=torch.zeros((1, 10)).float().to(self.device),
+                         expression=torch.zeros((1, 10)).float().cuda(),
                          transl=transl
                          )
         hpoints = output.vertices[0].detach().cpu()
@@ -264,85 +279,100 @@ class HOISolver:
         source_points_3d = np.asarray(corresp['object_points'])
         target_points_3d = np.asarray(corresp['body_points'])
 
-        if source_points_3d.shape[0] == 0 and object_points.shape[0] == 0:
-            print(f"No constraints for frame {i + start_frame}, skipping optimization.")
-            return {
-                'global_orient': global_orient,
-                'body_pose': body_pose,
-                'icp_transform_matrix': np.eye(4),
-                'optimized_joints': [],
-            }
-
-        if is_multiview:
-            incam_params = (body_params["global_orient"][i], body_params["transl"][i])
-            global_params = (global_body_params["global_orient"][i], global_body_params["transl"][i])
-        else:
-            incam_params = None
-            global_params = None
-        R_opt, t_opt = solve_weighted_priority(incam_params, global_params, source_points_3d, target_points_3d, object_points, image_points, K, all_mutiview_info, weight_3d=900.0, weight_2d=2.0)
+        R_opt, t_opt = solve_weighted_priority(
+            source_points_3d,
+            target_points_3d,
+            object_points,
+            image_points,
+            K,
+            T_ext=T_ext,
+            weight_3d=900.0,
+            weight_2d=2.0,
+        )
         transform_matrix = np.eye(4)
         transform_matrix[:3, :3] = R_opt
         transform_matrix[:3, 3] = t_opt.flatten()
 
-        # target_joints, constraint_joints = self.check_limb_joints_in_corresp(
-        #     corresp, body_points_idx, joint_mapping, part_kp_file)
+        if debug_out_dir:
+            prefix = debug_prefix or f"frame_{i + start_frame:05d}"
+            out_dir = Path(debug_out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-        # if target_joints:
-        #     print(f"Found limb joints to optimize: {list(target_joints.keys())}")
-        #     print(f"Constraint joints: {constraint_joints}")
+            # Human mesh (before IK)
+            self.save_mesh_as_obj(hpoints.numpy(), self.model.faces, str(out_dir / f"{prefix}_human_before_ik.obj"))
 
-        #     transformed_obj_points = (transform_matrix @ np.hstack([source_points_3d, np.ones((source_points_3d.shape[0], 1))]).T).T[:,
-        #                              :3]
+            # Object mesh before/after least-squares
+            obj_before = deepcopy(obj_init)
+            self._save_o3d_mesh(obj_before, str(out_dir / f"{prefix}_obj_before_ls.obj"))
 
-        #     with torch.no_grad():
-        #         output = self.model(betas=shape,
-        #                             body_pose=body_pose,
-        #                             jaw_pose=zero_pose,
-        #                             leye_pose=zero_pose,
-        #                             reye_pose=zero_pose,
-        #                             global_orient=global_orient,
-        #                             expression=torch.zeros((1, 10)).float().to(self.device),
-        #                             transl=transl)
-        #         joints = output.joints[0]
-        #         pelvis = joints[0]
+            obj_after = deepcopy(obj_init)
+            overts = np.asarray(obj_after.vertices)
+            overts_t = self.apply_transform_to_model(overts, transform_matrix)
+            obj_after.vertices = o3d.utility.Vector3dVector(overts_t)
+            self._save_o3d_mesh(obj_after, str(out_dir / f"{prefix}_obj_after_ls.obj"))
 
-        #     target_joints_dict = {}
-        #     for joint_idx, corresp_pos in target_joints.items():
-        #         target_world_pos = torch.tensor(transformed_obj_points[corresp_pos],
-        #                                         device=self.device, dtype=torch.float32)
-        #         target_offset = target_world_pos - pelvis
-        #         target_joints_dict[joint_idx] = target_offset
+        target_joints, constraint_joints = self.check_limb_joints_in_corresp(
+            corresp, body_points_idx, joint_mapping, part_kp_file)
 
-        #     print("Starting IK optimization...")
-        #     global_orient_new, body_pose_new = self.run_joint_ik(
-        #         global_orient, body_pose, shape, transl,
-        #         target_joints_dict=target_joints_dict,
-        #         constraint_joints_list=constraint_joints,
-        #         max_iter=10, lr=1.0
-        #     )
+        if target_joints:
+            print(f"Found limb joints to optimize: {list(target_joints.keys())}")
+            print(f"Constraint joints: {constraint_joints}")
 
-        #     if save_meshes:
-        #         output = self.model(betas=shape,
-        #                             body_pose=body_pose_new,
-        #                             jaw_pose=zero_pose,
-        #                             leye_pose=zero_pose,
-        #                             reye_pose=zero_pose,
-        #                             global_orient=global_orient_new,
-        #                             expression=torch.zeros((1, 10)).float().to(self.device),
-        #                             transl=transl)
+            transformed_obj_points = (transform_matrix @ np.hstack([source_points_3d, np.ones((source_points_3d.shape[0], 1))]).T).T[:,
+                                     :3]
 
-        #         vertices_after_ik = output.vertices[0].detach().cpu().numpy()
-        #         self.save_mesh_as_obj(vertices_after_ik, self.model.faces, "human_after_ik.obj")
+            with torch.no_grad():
+                output = self.model(betas=shape,
+                                    body_pose=body_pose,
+                                    jaw_pose=zero_pose,
+                                    leye_pose=zero_pose,
+                                    reye_pose=zero_pose,
+                                    global_orient=global_orient,
+                                    expression=torch.zeros((1, 10)).float().to(self.device),
+                                    transl=transl)
+                joints = output.joints[0]
+                pelvis = joints[0]
 
-        #     print("HOI solving completed with IK optimization!")
-        #     return {
-        #         'global_orient': global_orient_new,
-        #         'body_pose': body_pose_new,
-        #         'icp_transform_matrix': transform_matrix,
-        #         'optimized_joints': list(target_joints.keys()),
-        #     }
-        # else:
-        #     print("No limb joints found for IK optimization. Only ICP alignment performed.")
+            target_joints_dict = {}
+            for joint_idx, corresp_pos in target_joints.items():
+                target_world_pos = torch.tensor(transformed_obj_points[corresp_pos],
+                                                device=self.device, dtype=torch.float32)
+                target_offset = target_world_pos - pelvis
+                target_joints_dict[joint_idx] = target_offset
+
+            print("Starting IK optimization...")
+            global_orient_new, body_pose_new = self.run_joint_ik(
+                global_orient, body_pose, shape, transl,
+                target_joints_dict=target_joints_dict,
+                constraint_joints_list=constraint_joints,
+                max_iter=10, lr=1.0
+            )
+
+            if save_meshes:
+                output = self.model(betas=shape,
+                                    body_pose=body_pose_new,
+                                    jaw_pose=zero_pose,
+                                    leye_pose=zero_pose,
+                                    reye_pose=zero_pose,
+                                    global_orient=global_orient_new,
+                                    expression=torch.zeros((1, 10)).float().to(self.device),
+                                    transl=transl)
+
+                vertices_after_ik = output.vertices[0].detach().cpu().numpy()
+                out_name = "human_after_ik.obj"
+                if debug_out_dir:
+                    out_name = str(Path(debug_out_dir) / f"{(debug_prefix or f'frame_{i + start_frame:05d}')}_human_after_ik.obj")
+                self.save_mesh_as_obj(vertices_after_ik, self.model.faces, out_name)
+
+            print("HOI solving completed with IK optimization!")
+            return {
+                'global_orient': global_orient_new,
+                'body_pose': body_pose_new,
+                'icp_transform_matrix': transform_matrix,
+                'optimized_joints': list(target_joints.keys()),
+            }
+        else:
+            print("No limb joints found for IK optimization. Only ICP alignment performed.")
         return {
             'global_orient': global_orient,
             'body_pose': body_pose,

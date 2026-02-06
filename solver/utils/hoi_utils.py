@@ -5,12 +5,12 @@ import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-# from plyfile import PlyData, PlyElement
+from plyfile import PlyData, PlyElement
 import scipy
 from scipy.spatial.transform import Rotation as R
 import smplx
 import open3d as o3d
-# from probreg import cpd
+from probreg import cpd
 
 
 def reconstruct3D_from_depth(pred_depth):
@@ -321,11 +321,6 @@ def icp_process(object_points_idx, body_points_idx,hpoints,obj_init,obj_init_sam
     return transformed_org_o,transformed_overts_sample
 
 def get_all_body_joints(body_params, global_body_params, smpl_model, start_frame, end_frame):
-    try:
-        device = next(smpl_model.parameters()).device
-    except StopIteration:
-        device = torch.device("cpu")
-
     incam_pelvis = []
     global_pelvis = []
     incam_orient_o = []
@@ -333,34 +328,34 @@ def get_all_body_joints(body_params, global_body_params, smpl_model, start_frame
     incam_transl_o = []
     global_transl_o = []
     for frame_idx in range(start_frame, end_frame):
-        body_pose = body_params['body_pose'][frame_idx].reshape(1, -1).to(device)  
-        shape = body_params['betas'][frame_idx].reshape(1, -1).to(device)  
-        global_orient = body_params['global_orient'][frame_idx].reshape(1, 3).to(device)
-        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).to(device)
-        transl = body_params['transl'][frame_idx].reshape(1, -1).to(device)
+        body_pose = body_params['body_pose'][frame_idx].reshape(1, -1).cuda()  
+        shape = body_params['betas'][frame_idx].reshape(1, -1).cuda()  
+        global_orient = body_params['global_orient'][frame_idx].reshape(1, 3).cuda()
+        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).cuda()
+        transl = body_params['transl'][frame_idx].reshape(1, -1).cuda()
         output = smpl_model(betas=shape,   
                                 body_pose=body_pose,  
                                 jaw_pose=zero_pose,   
                                 leye_pose=zero_pose,
                                 reye_pose=zero_pose,
                                 global_orient=global_orient,
-                                expression=torch.zeros((1, 10)).float().to(device),
+                                expression=torch.zeros((1, 10)).float().cuda(),
                                 transl=transl)
         pelvis_incam = output.joints[:, 0, :]
         incam_pelvis.append(pelvis_incam)
         incam_orient_o.append(global_orient)
         incam_transl_o.append(transl)
-        body_pose_global = global_body_params['body_pose'][frame_idx].reshape(1, -1).to(device)
-        shape_global = global_body_params['betas'][frame_idx].reshape(1, -1).to(device)
-        global_orient_global = global_body_params['global_orient'][frame_idx].reshape(1, 3).to(device)
-        transl_global = global_body_params['transl'][frame_idx].reshape(1, -1).to(device)        
+        body_pose_global = global_body_params['body_pose'][frame_idx].reshape(1, -1).cuda()
+        shape_global = global_body_params['betas'][frame_idx].reshape(1, -1).cuda()
+        global_orient_global = global_body_params['global_orient'][frame_idx].reshape(1, 3).cuda()
+        transl_global = global_body_params['transl'][frame_idx].reshape(1, -1).cuda()        
         output_global = smpl_model(betas=shape_global,
                                    body_pose=body_pose_global,
                                    jaw_pose=zero_pose,
                                    leye_pose=zero_pose,
                                    reye_pose=zero_pose,
                                    global_orient=global_orient_global,
-                                   expression=torch.zeros((1, 10)).float().to(device),
+                                   expression=torch.zeros((1, 10)).float().cuda(),
                                    transl=transl_global)
         pelvis_global = output_global.joints[:, 0, :]
         global_pelvis.append(pelvis_global)

@@ -12,6 +12,15 @@ from io import BytesIO
 from threading import Lock
 from copy import deepcopy
 
+APP_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_ROOT.parent
+AUTH_DIR = PROJECT_ROOT / "4d_preprocess_debug"
+if str(AUTH_DIR) not in sys.path:
+    sys.path.insert(0, str(AUTH_DIR))
+
+from record_lock import RecordLock
+from user_auth import UserAuth
+
 try:
     import yaml
 except ImportError:
@@ -85,7 +94,15 @@ SCENE_DATA = None
 PREPROCESS_DIR = Path(__file__).resolve().parent.parent / "4dhoi_autorecon"
 UPLOAD_RECORDS_PATH = PREPROCESS_DIR / "upload_records.json"
 
-# 当前这台机器“锁定”的待标注任务（annotation_progress: 2.0 -> 2.1）
+# 锁与认证（与 data_dashboard 共享用户体系）
+LOCK_FILE = APP_ROOT / "webapp_locks.json"
+lock_manager = RecordLock(lock_file=LOCK_FILE, timeout=300)
+auth_manager = UserAuth(
+    users_file=AUTH_DIR / "users.json",
+    sessions_file=AUTH_DIR / "sessions.json",
+)
+
+# 当前这台机器“锁定”的待标注任务（历史 2.1 方案已废弃，仅用于清理遗留数据）
 HOI_TASKS = []
 
 
@@ -118,6 +135,40 @@ def _write_upload_records(records: list) -> None:
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(records, f, indent=4, ensure_ascii=False)
     tmp_path.replace(UPLOAD_RECORDS_PATH)
+
+
+# ===== 认证与锁相关工具 =====
+
+def _get_token() -> str:
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        token = request.cookies.get("auth_token", "")
+    return token
+
+
+def _get_current_user():
+    token = _get_token()
+    if not token:
+        return None
+    return auth_manager.validate_token(token)
+
+
+def _get_user_id() -> str:
+    user = _get_current_user()
+    if user:
+        return user.get("username", "")
+    return request.headers.get("X-User-Id") or request.args.get("user_id") or ""
+
+
+def _get_user_name() -> str:
+    user = _get_current_user()
+    if user:
+        return user.get("display_name", user.get("username", ""))
+    return request.headers.get("X-User-Name") or request.args.get("user_name") or ""
+
+
+def _get_lock_key(session_folder: str) -> str:
+    return f"hoi_{session_folder}"
 
 
 def _init_hoi_tasks() -> None:
@@ -878,20 +929,64 @@ def get_metadata():
     })
 
 
+# ========== 用户认证 ==========
+
+@app.post("/api/login")
+def api_login():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    if not username:
+        return jsonify({"ok": False, "error": "请输入用户名"}), 400
+
+    success, msg, token = auth_manager.login(username)
+    if not success:
+        return jsonify({"ok": False, "error": msg}), 400
+
+    resp = jsonify({"ok": True, "token": token, "username": username})
+    resp.set_cookie("auth_token", token, max_age=7 * 24 * 3600, httponly=True, samesite="Lax")
+    return resp
+
+
+@app.post("/api/logout")
+def api_logout():
+    token = _get_token()
+    if token:
+        user = auth_manager.validate_token(token)
+        if user:
+            lock_manager.release_user_locks(user.get("username", ""))
+        auth_manager.logout(token)
+
+    resp = jsonify({"ok": True})
+    resp.delete_cookie("auth_token")
+    return resp
+
+
+@app.get("/api/me")
+def api_me():
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "logged_in": False})
+    return jsonify({"ok": True, "logged_in": True, "user": user})
+
+
 @app.route('/api/hoi_tasks')
 def get_hoi_tasks():
     """
-    返回当前 annotation_progress == 2.0 的所有 HOI 待标注任务列表。
+    返回当前 annotation_progress == 2.0 的所有 HOI 待标注任务列表，附带锁定状态。
     每次调用都会从 upload_records.json 重新读取，保证结果实时。
     """
     if not UPLOAD_RECORDS_PATH.exists():
-        return jsonify({'tasks': []})
+        return jsonify({'tasks': [], 'total': 0})
 
     try:
         records = _load_upload_records()
     except Exception as e:
         print(f"Failed to load upload_records.json in get_hoi_tasks: {e}")
-        return jsonify({'tasks': []})
+        return jsonify({'tasks': [], 'total': 0})
+
+    all_locks = lock_manager.get_all_locks()
+    current_user = _get_current_user()
+    current_username = current_user.get("username") if current_user else None
 
     tasks = []
     for rec in records:
@@ -899,10 +994,22 @@ def get_hoi_tasks():
             prog = float(rec.get("annotation_progress", 0))
         except Exception:
             prog = 0.0
-        if prog == 2.0:
-            tasks.append(rec)
+        if prog != 2.0:
+            continue
 
-    return jsonify({'tasks': tasks})
+        session_folder = str(rec.get("session_folder", ""))
+        lock_key = _get_lock_key(session_folder)
+        lock_info = all_locks.get(lock_key)
+
+        rec_with_lock = {**rec}
+        rec_with_lock["_locked"] = lock_info is not None
+        rec_with_lock["_locked_by"] = lock_info.get("user_name") if lock_info else None
+        rec_with_lock["_locked_by_me"] = (
+            lock_info is not None and lock_info.get("user_id") == current_username
+        )
+        tasks.append(rec_with_lock)
+
+    return jsonify({'tasks': tasks, 'total': len(tasks)})
 
 
 @app.route('/api/hoi_start', methods=['POST'])
@@ -910,13 +1017,19 @@ def hoi_start():
     """
     开始标注某个 session：
     - 前端提供 session_folder（与 upload_records.json 中一致的字符串）
-    - 仅允许从 annotation_progress == 2.0 切换到 2.1
-    - 同时在后端加载对应 video_dir（video.mp4 / obj_org.obj / motion 等）
+    - 仅允许在 annotation_progress == 2.0 时锁定
+    - 使用文件锁避免多人同时操作同一 session
+    - 成功后在后端加载对应 video_dir（video.mp4 / obj_org.obj / motion 等）
     """
     payload = request.get_json(silent=True) or {}
     session_folder = payload.get('session_folder')
     if not isinstance(session_folder, str) or not session_folder:
         return jsonify({'error': 'session_folder is required'}), 400
+
+    user_id = _get_user_id()
+    user_name = _get_user_name() or user_id
+    if not user_id:
+        return jsonify({'error': '未登录或缺少用户信息'}), 401
 
     if not UPLOAD_RECORDS_PATH.exists():
         return jsonify({'error': 'upload_records.json not found'}), 500
@@ -944,28 +1057,33 @@ def hoi_start():
     if prog != 2.0:
         return jsonify({'error': f'annotation_progress must be 2.0 to start, got {prog}'}), 400
 
+    lock_key = _get_lock_key(session_folder)
+    success, msg = lock_manager.acquire(lock_key, user_id=user_id, user_name=user_name)
+    if not success:
+        return jsonify({'error': msg, 'locked': True}), 409
+
     # 解析为绝对路径
     video_dir_path = _resolve_session_path(session_folder)
     if not video_dir_path.exists():
+        lock_manager.release(lock_key, user_id=user_id, force=True)
         return jsonify({'error': f'video_dir not exists: {video_dir_path}'}), 404
 
     # 尝试加载该 session 对应的数据
     ok = _load_video_session(str(video_dir_path))
     if not ok:
+        lock_manager.release(lock_key, user_id=user_id, force=True)
         return jsonify({'error': f'failed to load video session at {video_dir_path}'}), 500
 
-    # 若加载成功，再将 progress 2.0 -> 2.1，避免锁死无效样本
-    target_rec['annotation_progress'] = 2.1
-    try:
-        _write_upload_records(records)
-    except Exception as e:
-        print(f"Failed to write upload_records.json in hoi_start: {e}")
-        return jsonify({'error': 'failed to update upload_records.json'}), 500
+    target_rec_with_lock = {**target_rec}
+    target_rec_with_lock['_locked'] = True
+    target_rec_with_lock['_locked_by'] = user_name
+    target_rec_with_lock['_locked_by_me'] = True
 
     return jsonify({
         'status': 'success',
         'video_dir': str(video_dir_path),
-        'record': target_rec,
+        'record': target_rec_with_lock,
+        'lock': {'key': lock_key, 'user_id': user_id, 'user_name': user_name},
     })
 
 
@@ -974,13 +1092,16 @@ def hoi_finish():
     """
     结束当前标注：
     - 用于“放弃/结束”当前标注但不调用 save_merged_annotations 的场景
-    - 将指定 session_folder 的 annotation_progress 从 2.1 改回 2.0
-     （如果已经被 save_merged_annotations 改为 3.0，则不会修改）
+    - 仅负责释放锁，不再改写 annotation_progress
     """
     payload = request.get_json(silent=True) or {}
     session_folder = payload.get('session_folder')
     if not isinstance(session_folder, str) or not session_folder:
         return jsonify({'error': 'session_folder is required'}), 400
+
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({'error': '未登录或缺少用户信息'}), 401
 
     if not UPLOAD_RECORDS_PATH.exists():
         return jsonify({'error': 'upload_records.json not found'}), 500
@@ -1005,27 +1126,73 @@ def hoi_finish():
     except Exception:
         prog = 0.0
 
-    if prog == 2.1:
-        target_rec['annotation_progress'] = 2.0
-        try:
-            _write_upload_records(records)
-        except Exception as e:
-            print(f"Failed to write upload_records.json in hoi_finish: {e}")
-            return jsonify({'error': 'failed to update upload_records.json'}), 500
+    lock_key = _get_lock_key(session_folder)
+    success, msg = lock_manager.release(lock_key, user_id=user_id)
+    status_code = 200 if success else 403
 
-    return jsonify({'status': 'success', 'annotation_progress': target_rec.get('annotation_progress')})
+    return jsonify({
+        'ok': success,
+        'message': msg,
+        'annotation_progress': target_rec.get('annotation_progress'),
+    }), status_code
 
 
 @app.route('/api/finalize_hoi_sessions', methods=['POST'])
 def finalize_hoi_sessions():
     """
-    扫描所有 annotation_progress == 2.1 的记录：
-    - 若对应 session_folder 下存在 kp_record_merged.json，则改为 3.0
-    - 否则改回 2.0
-    用于一次性“收尾”，保证未完成的任务不会一直被锁住。
+    清理 HOI 锁：强制释放所有以 hoi_ 前缀命名的锁，避免长期占用。
     """
-    updated = _reset_unfinished_hoi_locks()
-    return jsonify({'status': 'success', 'updated_records': updated})
+    released = 0
+    for key in list(lock_manager.get_all_locks().keys()):
+        if key.startswith('hoi_'):
+            ok, _ = lock_manager.release(key, force=True)
+            if ok:
+                released += 1
+
+    return jsonify({'status': 'success', 'released_locks': released})
+
+
+# ========== 锁定相关 API ==========
+
+@app.post('/api/lock_record')
+def api_lock_record():
+    data = request.get_json(silent=True) or {}
+    session_folder = data.get('session_folder') or data.get('id')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'ok': False, 'error': '缺少 session_folder'}), 400
+
+    user_id = _get_user_id()
+    user_name = _get_user_name() or user_id
+    if not user_id:
+        return jsonify({'ok': False, 'error': '未登录或缺少用户信息'}), 401
+
+    lock_key = _get_lock_key(session_folder)
+    success, msg = lock_manager.acquire(lock_key, user_id=user_id, user_name=user_name)
+    status_code = 200 if success else 409
+    return jsonify({'ok': success, 'message': msg, 'lock_key': lock_key}), status_code
+
+
+@app.post('/api/unlock_record')
+def api_unlock_record():
+    data = request.get_json(silent=True) or {}
+    session_folder = data.get('session_folder') or data.get('id')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'ok': False, 'error': '缺少 session_folder'}), 400
+
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({'ok': False, 'error': '未登录或缺少用户信息'}), 401
+
+    lock_key = _get_lock_key(session_folder)
+    success, msg = lock_manager.release(lock_key, user_id=user_id)
+    status_code = 200 if success else 403
+    return jsonify({'ok': success, 'message': msg, 'lock_key': lock_key}), status_code
+
+
+@app.get('/api/record_locks')
+def api_record_locks():
+    all_locks = lock_manager.get_all_locks()
+    return jsonify({'locks': all_locks})
 
 @app.route('/api/frame/<int:frame_idx>')
 def get_frame(frame_idx):

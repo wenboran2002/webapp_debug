@@ -13,7 +13,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import open3d as o3d
 import torch
-# from pytorch3d.transforms import axis_angle_to_matrix
+from pytorch3d.transforms import axis_angle_to_matrix
 import math
 WARNED = False
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
@@ -53,35 +53,33 @@ def rotate_camera(rotation_angle, rotation_axis):
 
 
 def transform_to_global(R_incam, T_incam, incam_orient, global_orient, incam_pelvis, global_pelvis):
-    # R_old = axis_angle_to_matrix(incam_orient).squeeze(0)
-    # R_new = axis_angle_to_matrix(global_orient).squeeze(0)
-    # T_old = incam_pelvis.squeeze(0)
-    # T_new = global_pelvis.squeeze(0)
-    # R_delta = R_new @ R_old.T
-    # t_delta = T_new - (T_old @ R_delta.T)
+    R_old = axis_angle_to_matrix(incam_orient).squeeze(0)
+    R_new = axis_angle_to_matrix(global_orient).squeeze(0)
+    T_old = incam_pelvis.squeeze(0)
+    T_new = global_pelvis.squeeze(0)
+    R_delta = R_new @ R_old.T
+    t_delta = T_new - (T_old @ R_delta.T)
 
-    # R_ind = R_delta
-    # t_ind = t_delta
-    # R_total = R_ind @ R_incam.float()
-    # T_total = T_incam.float() @ R_ind.T + t_ind.float()
-    # return R_total, T_total
-    return None, None
+    R_ind = R_delta
+    t_ind = t_delta
+    R_total = R_ind @ R_incam.float()
+    T_total = T_incam.float() @ R_ind.T + t_ind.float()
+    return R_total, T_total
 
 
 def inverse_transform_to_incam(R_best_global, T_best_global, incam_orient, global_orient, incam_pelvis, global_pelvis):
-    # R_old = axis_angle_to_matrix(incam_orient).squeeze(0)
-    # R_new = axis_angle_to_matrix(global_orient).squeeze(0)
-    # T_old = incam_pelvis.squeeze(0)
-    # T_new = global_pelvis.squeeze(0)
+    R_old = axis_angle_to_matrix(incam_orient).squeeze(0)
+    R_new = axis_angle_to_matrix(global_orient).squeeze(0)
+    T_old = incam_pelvis.squeeze(0)
+    T_new = global_pelvis.squeeze(0)
 
-    # R_delta = R_new @ R_old.T
-    # t_delta = T_new - (T_old @ R_delta.T)
+    R_delta = R_new @ R_old.T
+    t_delta = T_new - (T_old @ R_delta.T)
 
-    # R_incam = R_delta.T @ R_best_global.float()
-    # T_incam = (T_best_global.float() - t_delta.float()) @ R_delta
+    R_incam = R_delta.T @ R_best_global.float()
+    T_incam = (T_best_global.float() - t_delta.float()) @ R_delta
 
-    # return R_incam, T_incam
-    return None, None
+    return R_incam, T_incam
 
 
 def compute_bounding_box(vertices):

@@ -3,8 +3,8 @@ import json
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
-import open3d as o3d
 import os
+import shutil
 
 
 def compute_combined_transform(incam_params, global_params):
@@ -32,7 +32,14 @@ def apply_transform_to_smpl_params(global_orient, transl, incam_params, global_p
         original_transl = original_transl.squeeze()
     new_transl = R_combined @ original_transl + T_combined
     return new_orient, new_transl
-def transform_and_save_parameters(human_params_dict, org_params, camera_params, output_dir, original_object_path, user_scale=1.0):
+def transform_and_save_parameters(
+    human_params_dict,
+    org_params,
+    camera_params,
+    output_dir,
+    original_object_path,
+    user_scale=1.0,
+):
     print("Transforming and saving parameters...")
     os.makedirs(output_dir, exist_ok=True)
     incam_params = camera_params["smpl_params_incam"]
@@ -51,14 +58,41 @@ def transform_and_save_parameters(human_params_dict, org_params, camera_params, 
 
     print(f"Transforming human parameters for {len(sorted_frames)} frames...")
 
-    for id, frame_idx in enumerate(sorted_frames):
+    def _get_cam_param(param_dict, frame_idx, fallback_idx):
+        """Return camera param at absolute frame_idx, fallback to local index.
+
+        camera_params often stores full-length lists indexed by absolute frame.
+        When optimizing a subrange, using enumerate() index will misalign frames.
+        """
+        try:
+            if isinstance(param_dict, (list, tuple)):
+                if 0 <= frame_idx < len(param_dict):
+                    return param_dict[frame_idx]
+                return param_dict[fallback_idx]
+            # dict-like
+            if frame_idx in param_dict:
+                return param_dict[frame_idx]
+            if str(frame_idx) in param_dict:
+                return param_dict[str(frame_idx)]
+            return param_dict[fallback_idx]
+        except Exception:
+            return param_dict[fallback_idx]
+
+    for local_id, frame_idx in enumerate(sorted_frames):
         frame_str = str(frame_idx)
 
         original_global_orient = torch.tensor(human_params_dict['global_orient'][frame_str], dtype=torch.float32)
         original_transl = torch.tensor(human_params_dict['transl'][frame_str], dtype=torch.float32)
 
-        incam_param = (incam_params['global_orient'][id], incam_params['transl'][id])
-        global_param = (global_params['global_orient'][id], global_params['transl'][id])
+        # Use absolute frame_idx whenever possible; fallback to local_id for older formats.
+        incam_param = (
+            _get_cam_param(incam_params['global_orient'], frame_idx, local_id),
+            _get_cam_param(incam_params['transl'], frame_idx, local_id),
+        )
+        global_param = (
+            _get_cam_param(global_params['global_orient'], frame_idx, local_id),
+            _get_cam_param(global_params['transl'], frame_idx, local_id),
+        )
 
         transformed_human_params['body_pose'][frame_str] = human_params_dict['body_pose'][frame_str]
         transformed_human_params['betas'][frame_str] = human_params_dict['betas'][frame_str]
@@ -73,25 +107,26 @@ def transform_and_save_parameters(human_params_dict, org_params, camera_params, 
     if 'poses' in org_params and org_params['poses'] and original_object_path and os.path.exists(original_object_path):
         print("Transforming object parameters and mesh...")
 
-        scale = org_params.get('scale', 1.0)
-        scale_init = user_scale
-
         transformed_object_params = {
             'R_total': {},
             'T_total': {},
-            'scale': scale,
-            'scale_init': scale_init
         }
 
-        for id, frame_idx in enumerate(sorted_frames):
+        for local_id, frame_idx in enumerate(sorted_frames):
             frame_str = str(frame_idx)
 
-            if frame_idx < len(org_params['poses']) and org_params['poses'][frame_str] is not None:
-                R_final = np.array(org_params['poses'][frame_str])
-                t_final = np.array(org_params['centers'][frame_str])
+            if frame_str in org_params['poses'] and org_params['poses'][frame_str] is not None:
+                R_final = np.array(org_params['poses'][frame_str], dtype=np.float32)
+                t_final = np.array(org_params['centers'][frame_str], dtype=np.float32)
 
-                incam_param = (incam_params['global_orient'][id], incam_params['transl'][id])
-                global_param = (global_params['global_orient'][id], global_params['transl'][id])
+                incam_param = (
+                    _get_cam_param(incam_params['global_orient'], frame_idx, local_id),
+                    _get_cam_param(incam_params['transl'], frame_idx, local_id),
+                )
+                global_param = (
+                    _get_cam_param(global_params['global_orient'], frame_idx, local_id),
+                    _get_cam_param(global_params['transl'], frame_idx, local_id),
+                )
 
                 R_combined, T_combined = compute_combined_transform(incam_param, global_param)
 
@@ -104,11 +139,8 @@ def transform_and_save_parameters(human_params_dict, org_params, camera_params, 
                 transformed_object_params['R_total'][frame_str] = np.eye(3).tolist()
                 transformed_object_params['T_total'][frame_str] = np.zeros(3).tolist()
 
-        transformed_object_path = transform_and_save_object_mesh(
-            original_object_path, scale, scale_init, output_dir
-        )
-
-        print(f"Transformed object parameters with scale: {scale}, scale_init: {scale_init}")
+        transformed_object_path = transform_and_save_object_mesh(original_object_path, output_dir)
+        print("Transformed object parameters computed; mesh copied (no extra scaling).")
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -119,7 +151,7 @@ def transform_and_save_parameters(human_params_dict, org_params, camera_params, 
             'total_frames': len(sorted_frames),
             'frame_indices': sorted_frames,
             'has_object_params': transformed_object_params is not None,
-            'user_scale': user_scale
+            # user_scale is kept only for backward compatibility; scale is baked into obj_init.obj.
         },
         'human_params': transformed_human_params
     }
@@ -135,40 +167,15 @@ def transform_and_save_parameters(human_params_dict, org_params, camera_params, 
     if transformed_object_path:
         saved_files.append(transformed_object_path)
     return saved_files
-def transform_and_save_object_mesh(original_object_path, scale, scale_init, output_dir):
-
-    original_mesh = o3d.io.read_triangle_mesh(original_object_path)
-    if len(original_mesh.vertices) == 0:
-        print(f"Error: Could not load mesh from {original_object_path}")
-        return None
-    original_vertices = np.asarray(original_mesh.vertices)
-    print(f"Applying scale transformations: scale={scale}, scale_init={scale_init}")
-    scaled_vertices = original_vertices * scale
-
-    center_m = np.mean(scaled_vertices, axis=0)
-    scaled_vertices -= center_m
-    scaled_vertices *= scale_init
-
-    transformed_mesh = o3d.geometry.TriangleMesh()
-    transformed_mesh.vertices = o3d.utility.Vector3dVector(scaled_vertices)
-    transformed_mesh.triangles = original_mesh.triangles
-
-    if original_mesh.has_vertex_colors():
-        transformed_mesh.vertex_colors = original_mesh.vertex_colors
-    if original_mesh.has_vertex_normals():
-        transformed_mesh.vertex_normals = original_mesh.vertex_normals
-
-    transformed_mesh.compute_vertex_normals()
-
+def transform_and_save_object_mesh(original_object_path, output_dir):
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_object_path = os.path.join(output_dir, f'transformed_object_{timestamp}.obj')
+    output_object_path = os.path.join(output_dir, f"transformed_object_{timestamp}.obj")
 
-    success = o3d.io.write_triangle_mesh(output_object_path, transformed_mesh)
-
-    if success:
-        print(f"Transformed object mesh saved to: {output_object_path}")
+    try:
+        shutil.copyfile(original_object_path, output_object_path)
+        print(f"Object mesh copied to: {output_object_path}")
         return output_object_path
-    else:
-        print(f"Error: Failed to save transformed mesh to: {output_object_path}")
+    except Exception as e:
+        print(f"Error: Failed to copy mesh: {e}")
         return None

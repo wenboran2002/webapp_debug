@@ -286,18 +286,17 @@ def compute_collision_loss(hverts, overts, hfaces, ofaces, h_weight=10.0, thresh
 
 
 def compute_mask_loss(width, height, video_dir, hverts, overts, hfaces, ofaces, mask_weight=1.5, edge_weight=1e-3, frame_idx=None):
-    device = hverts.device
     downsample_height = height // 4
     downsample_width = width // 4
     downsample_image_size = (downsample_height, downsample_width)
 
     output = torch.load(video_dir + "/motion/result.pt")
-    K = output["K_fullimg"][0].to(device)
+    K = output["K_fullimg"][0].cuda()
     scale_x = downsample_width / width
     scale_y = downsample_height / height
     K_nf = K.clone()
-    R = torch.eye(3, dtype=torch.float32).unsqueeze(0).to(device)
-    T = torch.zeros(3, dtype=torch.float32).unsqueeze(0).to(device)
+    R = torch.eye(3, dtype=torch.float32).unsqueeze(0).cuda()
+    T = torch.zeros(3, dtype=torch.float32).unsqueeze(0).cuda()
     i = frame_idx 
 
     render_size = max(downsample_height, downsample_width)  # 安全起见，用 max
@@ -309,8 +308,8 @@ def compute_mask_loss(width, height, video_dir, hverts, overts, hfaces, ofaces, 
         orig_size=(width, height),  # 用 max(width, height) 来匹配 image_size
         anti_aliasing=True,
     )
-    hfaces = torch.tensor(hfaces, dtype=torch.int64).to(device)
-    ofaces = torch.tensor(ofaces, dtype=torch.int64).to(device)
+    hfaces = torch.tensor(hfaces, dtype=torch.int64).cuda()
+    ofaces = torch.tensor(ofaces, dtype=torch.int64).cuda()
     human_mask = renderer(hverts, hfaces.unsqueeze(0),  mode="silhouettes").squeeze()
     object_mask = renderer(overts, ofaces.unsqueeze(0),  mode="silhouettes").squeeze()
     human_mask = TF.resize(human_mask.unsqueeze(0), downsample_image_size, 
@@ -374,8 +373,8 @@ def compute_mask_loss(width, height, video_dir, hverts, overts, hfaces, ofaces, 
     h_edt = distance_transform_edt(1 - (h_edge_gt.detach().cpu().numpy() > 0)) ** (power * 2)
     o_edt = distance_transform_edt(1 - (o_edge_gt.detach().cpu().numpy() > 0)) ** (power * 2)
     # print("h_edt_max", h_edt.max(), "o_edt_max:", o_edt.max())
-    h_edt = torch.from_numpy(h_edt).repeat(batch_size, 1, 1).float().to(device)
-    o_edt = torch.from_numpy(o_edt).repeat(batch_size, 1, 1).float().to(device)
+    h_edt = torch.from_numpy(h_edt).repeat(batch_size, 1, 1).float().cuda()
+    o_edt = torch.from_numpy(o_edt).repeat(batch_size, 1, 1).float().cuda()
 
     edge_img = o_edge_render.squeeze(0).detach().cpu().numpy()
     edge_img_gt = o_edge_gt.squeeze(0).detach().cpu().numpy()

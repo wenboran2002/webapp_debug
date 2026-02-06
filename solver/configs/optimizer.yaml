@@ -1,0 +1,19 @@
+# VideoBodyObjectOptimizer 默认超参
+# 说明：optimize() 里如果显式传参，会覆盖这里的默认值。
+
+optimize:
+  steps: 100
+  print_every: 10
+  optimize_interval: 3
+
+loss_weights:
+  contact: 50.0
+  collision: 8.0
+  mask: 0.05
+
+smoothing:
+  alpha: 0.25
+  beta: 0.25
+  window: 7
+  passes: 2
+  method: ema_box   # 可选: ema | ema_box | gaussian

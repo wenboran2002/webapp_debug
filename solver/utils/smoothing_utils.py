@@ -387,3 +387,18 @@ def lowpass_smooth_all_dict(
     return data
 
 
+# Public wrappers (keep optimizer_part.py consistent across modules)
+# NOTE: these aliases must be defined AFTER the internal helpers above.
+rotation_matrix_to_quaternion = _rotation_matrix_to_quaternion
+quaternion_to_rotation_matrix = _quaternion_to_rotation_matrix
+quaternion_slerp = _quaternion_slerp
+
+ema_smooth_series = _ema_smooth_series
+box_smooth_series = _box_smooth_series
+gaussian_smooth_series = _gaussian_smooth_series
+
+smooth_quaternion_sequence = _smooth_quaternion_sequence
+box_smooth_quaternion_sequence = _box_smooth_quaternion_sequence
+gaussian_smooth_quaternion_sequence = _gaussian_smooth_quaternion_sequence
+
+

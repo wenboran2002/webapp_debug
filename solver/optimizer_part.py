@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt  
 import math
 import os
-import sys
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 import torch  
 import torch.optim as optim  
@@ -30,18 +29,24 @@ from .utils.camera_utils import transform_to_global, inverse_transform_to_incam
 from .utils.hoi_utils import get_all_body_joints
 from copy import deepcopy
 from .utils.vis.renderer import Renderer, get_global_cameras_static, get_ground_params_from_points
-def resource_path(relative_path):
-    try:
-                               
-        base_path = sys._MEIPASS
-    except Exception:
-                  
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from typing import Optional
+from .config import load_optimizer_config
+from .utils.smoothing_utils import (
+    rotation_matrix_to_quaternion,
+    quaternion_to_rotation_matrix,
+    quaternion_slerp,
+    ema_smooth_series,
+    box_smooth_series,
+    gaussian_smooth_series,
+    smooth_quaternion_sequence,
+    box_smooth_quaternion_sequence,
+    gaussian_smooth_quaternion_sequence,
+)
+from .kp_common import resource_path
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-J_regressor = torch.load(resource_path("video_optimizer/J_regressor.pt"), map_location=device).float().to(device)
-joint_sim = json.load(open(resource_path("video_optimizer/data/joint_sim.json")))
+J_regressor = torch.load(resource_path("video_optimizer/J_regressor.pt")).float().cuda()
+with open(resource_path("video_optimizer/data/joint_sim.json"), "r", encoding="utf-8") as _f:
+    joint_sim = json.load(_f)
 
 def load_downsampling_mapping(filepath):
     data = np.load(filepath)
@@ -54,73 +59,7 @@ def load_downsampling_mapping(filepath):
 
 downsampling_file_path = resource_path("video_optimizer/smplx_downsampling_1000.npz")
 D, faces_ds = load_downsampling_mapping(downsampling_file_path)
-D_torch = torch.tensor(D.toarray(), dtype=torch.float32, device=device)
-def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
-    R = R.to(dtype=torch.float32)
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = torch.sqrt(trace + 1.0) * 2.0
-        w = 0.25 * s
-        x = (R[2, 1] - R[1, 2]) / s
-        y = (R[0, 2] - R[2, 0]) / s
-        z = (R[1, 0] - R[0, 1]) / s
-    elif (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
-        s = torch.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2.0
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = torch.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2.0
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = torch.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2.0
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    q = torch.stack([w, x, y, z])
-    q = q / (torch.linalg.norm(q) + 1e-8)
-    return q
-def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
-    q = q / (torch.linalg.norm(q) + 1e-8)
-    w, x, y, z = q[0], q[1], q[2], q[3]
-    ww, xx, yy, zz = w * w, x * x, y * y, z * z
-    wx, wy, wz = w * x, w * y, w * z
-    xy, xz, yz = x * y, x * z, y * z
-
-    R = torch.stack([
-        torch.stack([1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy)]),
-        torch.stack([2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx)]),
-        torch.stack([2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)])
-    ])
-    return R.to(dtype=torch.float32)
-
-
-def quaternion_slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    q0 = q0 / (torch.linalg.norm(q0) + 1e-8)
-    q1 = q1 / (torch.linalg.norm(q1) + 1e-8)
-
-    dot = torch.dot(q0, q1)
-    q1 = torch.where(dot < 0.0, -q1, q1)
-    dot = torch.where(dot < 0.0, -dot, dot)
-
-    DOT_THRESHOLD = 0.9995
-    if float(dot) > DOT_THRESHOLD:
-        result = q0 + t * (q1 - q0)
-        return result / (torch.linalg.norm(result) + 1e-8)
-
-    theta_0 = torch.acos(dot)
-    sin_theta_0 = torch.sin(theta_0)
-    theta = theta_0 * t
-    sin_theta = torch.sin(theta)
-
-    s0 = torch.cos(theta) - dot * sin_theta / (sin_theta_0 + 1e-8)
-    s1 = sin_theta / (sin_theta_0 + 1e-8)
-    return s0 * q0 + s1 * q1
+D_torch = torch.tensor(D.toarray(), dtype=torch.float32, device="cuda")
 class VideoBodyObjectOptimizer:  
     def __init__(self,   
                  body_params,
@@ -132,7 +71,6 @@ class VideoBodyObjectOptimizer:
                  pairs_2d, 
                  object_meshes, 
                  sampled_obj_meshes,
-                 centers_depth,
                  icp_transform_matrix,
                  smpl_model,
                  start_frame,
@@ -143,7 +81,6 @@ class VideoBodyObjectOptimizer:
                  best_frame=None):  
         self.start_frame = start_frame
         self.end_frame = end_frame
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.seq_length = end_frame - start_frame
         self.smpl_model = smpl_model  
         self.pairs_2d = pairs_2d
@@ -152,7 +89,6 @@ class VideoBodyObjectOptimizer:
         self.hand_poses = hand_params
         self.object_meshes = object_meshes
         self.sampled_obj_meshes = sampled_obj_meshes
-        self.centers_depth = centers_depth
         self.icp_transform_matrix = icp_transform_matrix
         self.video_dir = video_dir
         self.is_static_object = is_static_object
@@ -175,7 +111,7 @@ class VideoBodyObjectOptimizer:
         self.obj_y_params = []  
         self.obj_z_params = []  
         self.obj_transl_params = []  
-        self.obj_transl_limit = torch.tensor([0.1, 0.1, 0.1]).to(self.device)
+        self.obj_transl_limit = torch.tensor([0.1, 0.1, 0.1]).cuda()
 
         self.icp_obj_R = []
         self.icp_obj_transl = []
@@ -197,34 +133,38 @@ class VideoBodyObjectOptimizer:
         )
 
         for i in range(self.start_frame, self.end_frame):
-            self.body_pose_params.append(nn.Parameter(self.body_params_sequence["body_pose"][i].to(self.device), requires_grad=True)) 
-            self.shape_params.append(nn.Parameter(self.body_params_sequence['betas'][i].to(self.device), requires_grad=True))  
+            self.body_pose_params.append(nn.Parameter(self.body_params_sequence["body_pose"][i].cuda(), requires_grad=True)) 
+            self.shape_params.append(nn.Parameter(self.body_params_sequence['betas'][i].cuda(), requires_grad=True))  
             handpose=self.hand_poses[str(i)]
                            
-            left_hand_pose = torch.from_numpy(np.asarray(handpose['left_hand']).reshape(-1,3)).float().to(self.device)
-            right_hand_pose = torch.from_numpy(np.asarray(handpose['right_hand']).reshape(-1,3)).float().to(self.device)
+            left_hand_pose = torch.from_numpy(np.asarray(handpose['left_hand']).reshape(-1,3)).float().cuda()
+            right_hand_pose = torch.from_numpy(np.asarray(handpose['right_hand']).reshape(-1,3)).float().cuda()
             self.left_hand_params.append(nn.Parameter(left_hand_pose, requires_grad=True))
             self.right_hand_params.append(nn.Parameter(right_hand_pose, requires_grad=True))
-            self.global_orient.append(self.body_params_sequence['global_orient'][i].to(self.device))
-            self.transl.append(self.body_params_sequence['transl'][i].to(self.device))
+            self.global_orient.append(self.body_params_sequence['global_orient'][i].cuda())
+            self.transl.append(self.body_params_sequence['transl'][i].cuda())
 
             trans_mat = self.icp_transform_matrix[i - self.start_frame]
             R_mat = trans_mat[:3, :3]
             transl_vec = trans_mat[:3, 3]
             
-            self.icp_obj_R.append(torch.from_numpy(R_mat).float().to(self.device))
-            self.icp_obj_transl.append(torch.from_numpy(transl_vec).float().to(self.device))
+            self.icp_obj_R.append(torch.from_numpy(R_mat).float().cuda())
+            self.icp_obj_transl.append(torch.from_numpy(transl_vec).float().cuda())
 
-            self.obj_x_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).to(self.device), requires_grad=True))
-            self.obj_y_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).to(self.device), requires_grad=True))
-            self.obj_z_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).to(self.device), requires_grad=True))
-            self.obj_transl_params.append(nn.Parameter(torch.zeros(3, dtype=torch.float32).to(self.device), requires_grad=True))
+            self.obj_x_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).cuda(), requires_grad=True))
+            self.obj_y_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).cuda(), requires_grad=True))
+            self.obj_z_params.append(nn.Parameter(torch.tensor(0.0, dtype=torch.float32).cuda(), requires_grad=True))
+            self.obj_transl_params.append(nn.Parameter(torch.zeros(3, dtype=torch.float32).cuda(), requires_grad=True))
 
         self.body_points_idx = body_points_idx
         self.object_points_idx = object_points_idx  
         self.body_kp_name = body_kp_name
-        if best_frame is not None:
+        if is_static_object:
+            if best_frame is None:
+                raise ValueError("best_frame is required when is_static_object=True")
             self.best_frame = best_frame
+        else:
+            self.best_frame = None
         self.mask = None  
         self.optimizer = None  
         self.current_frame = 0  
@@ -250,14 +190,14 @@ class VideoBodyObjectOptimizer:
     def get_body_points(self, frame_idx=None, sampled=False):  
         if frame_idx is None:  
             frame_idx = self.current_frame  
-        body_pose = self.body_pose_params[frame_idx].reshape(1, -1).to(self.device)  
+        body_pose = self.body_pose_params[frame_idx].reshape(1, -1).cuda()  
         body_pose_save = body_pose.clone().detach().cpu().numpy()
-        shape = self.shape_params[frame_idx].reshape(1, -1).to(self.device)  
-        global_orient = self.global_orient[frame_idx].reshape(1, 3).to(self.device)
-        left_hand_pose = self.left_hand_params[frame_idx].reshape(1, -1).to(self.device)
-        right_hand_pose = self.right_hand_params[frame_idx].reshape(1, -1).to(self.device)
-        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).to(self.device)
-        transl = self.transl[frame_idx].reshape(1, -1).to(self.device)
+        shape = self.shape_params[frame_idx].reshape(1, -1).cuda()  
+        global_orient = self.global_orient[frame_idx].reshape(1, 3).cuda()
+        left_hand_pose = self.left_hand_params[frame_idx].reshape(1, -1).cuda()
+        right_hand_pose = self.right_hand_params[frame_idx].reshape(1, -1).cuda()
+        zero_pose = torch.zeros((1, 3)).float().repeat(1, 1).cuda()
+        transl = self.transl[frame_idx].reshape(1, -1).cuda()
         output = self.smpl_model(betas=shape,   
                                 body_pose=body_pose,
                                 left_hand_pose=left_hand_pose,   
@@ -266,7 +206,7 @@ class VideoBodyObjectOptimizer:
                                 leye_pose=zero_pose,
                                 reye_pose=zero_pose,
                                 global_orient=global_orient,
-                                expression=torch.zeros((1, 10)).float().to(self.device),
+                                expression=torch.zeros((1, 10)).float().cuda(),
                                 transl=transl)
                                                         
         xyz = output.vertices[0]
@@ -399,21 +339,45 @@ class VideoBodyObjectOptimizer:
         interacting_indices = object_points_idx[:, 1] != 0
         return bool(np.any(interacting_indices))
     def optimize(self,   
-                steps=100,   
-                print_every=10,   
-                contact_weight=50,   
-                collision_weight=8, 
-                mask_weight=0.05,
-                project_2d_weight=3.5e-3,
-                optimize_interval=3,
-                smoothing_alpha=0.25,
-                smoothing_beta=0.25,
-                smoothing_window=7,
-                smoothing_passes=2,
-                smoothing_method='ema_box',
-                smoothing_cutoff=0.08,
-                smoothing_order=4,
-                smoothing_fs=1.0):
+                config_path: Optional[str] = None,
+                steps: Optional[int] = None,
+                print_every: Optional[int] = None,
+                contact_weight: Optional[float] = None,
+                collision_weight: Optional[float] = None,
+                mask_weight: Optional[float] = None,
+                optimize_interval: Optional[int] = None,
+                smoothing_alpha: Optional[float] = None,
+                smoothing_beta: Optional[float] = None,
+                smoothing_window: Optional[int] = None,
+                smoothing_passes: Optional[int] = None,
+                smoothing_method: Optional[str] = None,
+                **kwargs):
+        _ = kwargs  # allow deprecated/unknown kwargs without breaking older callers
+        cfg = load_optimizer_config(config_path)
+        if steps is None:
+            steps = int(cfg.get('optimize', {}).get('steps', 100))
+        if print_every is None:
+            print_every = int(cfg.get('optimize', {}).get('print_every', 10))
+        if optimize_interval is None:
+            optimize_interval = int(cfg.get('optimize', {}).get('optimize_interval', 3))
+
+        if contact_weight is None:
+            contact_weight = float(cfg.get('loss_weights', {}).get('contact', 50.0))
+        if collision_weight is None:
+            collision_weight = float(cfg.get('loss_weights', {}).get('collision', 8.0))
+        if mask_weight is None:
+            mask_weight = float(cfg.get('loss_weights', {}).get('mask', 0.05))
+
+        if smoothing_alpha is None:
+            smoothing_alpha = float(cfg.get('smoothing', {}).get('alpha', 0.25))
+        if smoothing_beta is None:
+            smoothing_beta = float(cfg.get('smoothing', {}).get('beta', 0.25))
+        if smoothing_window is None:
+            smoothing_window = int(cfg.get('smoothing', {}).get('window', 7))
+        if smoothing_passes is None:
+            smoothing_passes = int(cfg.get('smoothing', {}).get('passes', 2))
+        if smoothing_method is None:
+            smoothing_method = str(cfg.get('smoothing', {}).get('method', 'ema_box'))
         self.training_setup()   
                   
         self.leave_hand = False
@@ -561,9 +525,6 @@ class VideoBodyObjectOptimizer:
             ema_passes=smoothing_passes,
             window_size=smoothing_window,
             method=smoothing_method,
-            cutoff=smoothing_cutoff,
-            butter_order=smoothing_order,
-            fs=smoothing_fs,
         )
     def _interpolate_depths(self, begin_frame, end_frame):
         with torch.no_grad():
@@ -681,161 +642,9 @@ class VideoBodyObjectOptimizer:
         R_final = torch.mm(R_residual, R_icp)
         t_residual = self.obj_transl_params[frame_idx]
         t_icp = self.icp_obj_transl[frame_idx]
-        abs_idx = frame_idx + self.start_frame
-        depth_centers = torch.tensor(self.centers_depth[abs_idx], dtype=torch.float32, device=R_final.device)
+        depth_centers = torch.zeros(3, dtype=torch.float32, device=R_final.device)
         t_final = torch.mv(R_final, depth_centers) + torch.mv(R_residual, t_icp) + t_residual
         return R_final, t_final
-
-    def _ema_smooth_series(self, tensor_list, alpha=0.5, bidirectional=True):
-        if len(tensor_list) == 0:
-            return []
-        device = tensor_list[0].device
-        dtype = tensor_list[0].dtype
-                         
-        data = torch.stack([t.to(device=device, dtype=dtype) for t in tensor_list], dim=0)
-        T = data.shape[0]
-                 
-        y_fwd = data.clone()
-        for t in range(1, T):
-            y_fwd[t] = alpha * data[t] + (1.0 - alpha) * y_fwd[t - 1]
-        if not bidirectional:
-            return [y_fwd[t] for t in range(T)]
-                  
-        y_bwd = data.clone()
-        for t in range(T - 2, -1, -1):
-            y_bwd[t] = alpha * data[t] + (1.0 - alpha) * y_bwd[t + 1]
-        y = 0.5 * (y_fwd + y_bwd)
-        return [y[t] for t in range(T)]
-
-    def _smooth_quaternion_sequence(self, q_list, beta=0.5, bidirectional=True):
-        if len(q_list) == 0:
-            return []
-                              
-        qn = [q / (torch.linalg.norm(q) + 1e-8) for q in q_list]
-        T = len(qn)
-        q_fwd = [None] * T
-        q_fwd[0] = qn[0]
-        for t in range(1, T):
-            q_fwd[t] = quaternion_slerp(q_fwd[t - 1], qn[t], torch.tensor(beta, dtype=qn[t].dtype, device=qn[t].device))
-        if not bidirectional:
-            return q_fwd
-        q_bwd = [None] * T
-        q_bwd[-1] = qn[-1]
-        for t in range(T - 2, -1, -1):
-            q_bwd[t] = quaternion_slerp(q_bwd[t + 1], qn[t], torch.tensor(beta, dtype=qn[t].dtype, device=qn[t].device))
-        q_out = []
-        for t in range(T):
-            q_out.append(quaternion_slerp(q_fwd[t], q_bwd[t], torch.tensor(0.5, dtype=qn[t].dtype, device=qn[t].device)))
-        return q_out
-
-    def _box_smooth_series(self, tensor_list, window_size: int):
-        if len(tensor_list) == 0 or window_size <= 1:
-            return tensor_list
-        k = max(1, int(window_size))
-        if k % 2 == 0:
-            k += 1
-        half = k // 2
-        T = len(tensor_list)
-        out = []
-        for t in range(T):
-            s = max(0, t - half)
-            e = min(T, t + half + 1)
-            vals = [tensor_list[i] for i in range(s, e)]
-            out.append(torch.mean(torch.stack(vals, dim=0), dim=0))
-        return out
-
-    def _box_smooth_quaternion_sequence(self, q_list, window_size: int):
-        if len(q_list) == 0 or window_size <= 1:
-            return q_list
-        k = max(1, int(window_size))
-        if k % 2 == 0:
-            k += 1
-        half = k // 2
-        T = len(q_list)
-        out = []
-        for t in range(T):
-            s = max(0, t - half)
-            e = min(T, t + half + 1)
-                                  
-            q_mean = q_list[s]
-            for i in range(s + 1, e):
-                                                  
-                n = i - s + 1
-                w = 1.0 / n
-                q_mean = quaternion_slerp(q_mean, q_list[i], torch.tensor(w, dtype=q_mean.dtype, device=q_mean.device))
-            out.append(q_mean / (torch.linalg.norm(q_mean) + 1e-8))
-        return out
-
-    def _gaussian_kernel(self, window_size: int, sigma: float, device, dtype):
-        k = max(1, int(window_size))
-        if k % 2 == 0:
-            k += 1
-        center = k // 2
-        idx = torch.arange(k, device=device, dtype=dtype)
-        if sigma <= 0:
-            w = torch.ones(k, device=device, dtype=dtype)
-        else:
-            w = torch.exp(-0.5 * ((idx - center) / sigma) ** 2)
-        w = w / (w.sum() + 1e-8)
-        return w
-
-    def _gaussian_smooth_series(self, tensor_list, window_size: int, sigma: float = None):
-        if len(tensor_list) == 0 or window_size <= 1:
-            return tensor_list
-        device = tensor_list[0].device
-        dtype = tensor_list[0].dtype
-        k = max(1, int(window_size))
-        if k % 2 == 0:
-            k += 1
-        if sigma is None:
-            sigma = max(1.0, k / 3.0)
-        half = k // 2
-        kernel = self._gaussian_kernel(k, sigma, device, dtype)
-        T = len(tensor_list)
-        out = []
-        for t in range(T):
-            s = max(0, t - half)
-            e = min(T, t + half + 1)
-                                          
-            ks = half - (t - s)
-            ke = ks + (e - s)
-            kw = kernel[ks:ke]
-            vals = [tensor_list[i] * kw[i - s] for i in range(s, e)]
-            denom = kw.sum() + 1e-8
-            out.append(torch.stack(vals, dim=0).sum(dim=0) / denom)
-        return out
-
-    def _gaussian_smooth_quaternion_sequence(self, q_list, window_size: int, sigma: float = None):
-        if len(q_list) == 0 or window_size <= 1:
-            return q_list
-        k = max(1, int(window_size))
-        if k % 2 == 0:
-            k += 1
-        if sigma is None:
-            sigma = max(1.0, k / 3.0)
-                                                      
-        device = q_list[0].device
-        dtype = q_list[0].dtype
-        kernel = self._gaussian_kernel(k, sigma, device, dtype)
-        half = k // 2
-        T = len(q_list)
-        out = []
-        for t in range(T):
-            s = max(0, t - half)
-            e = min(T, t + half + 1)
-            ks = half - (t - s)
-            ke = ks + (e - s)
-            kw = kernel[ks:ke]
-                                 
-            q_mean = q_list[s]
-            w_sum = kw[0]
-            for i in range(s + 1, e):
-                w_i = kw[i - s]
-                gamma = float(w_i / (w_sum + w_i + 1e-8))
-                q_mean = quaternion_slerp(q_mean, q_list[i], torch.tensor(gamma, dtype=dtype, device=device))
-                w_sum = w_sum + w_i
-            out.append(q_mean / (torch.linalg.norm(q_mean) + 1e-8))
-        return out
 
     def _lowpass_smooth_all(self, alpha=0.5, beta_quat=0.5, bidirectional=True, ema_passes=1, window_size=1, method='ema_box', cutoff=0.08, butter_order=4, fs=1.0):
         with torch.no_grad():
@@ -844,11 +653,11 @@ class VideoBodyObjectOptimizer:
                 series = [p.data for p in self.body_pose_params]
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        series = self._ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
+                        series = ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        series = self._box_smooth_series(series, window_size)
+                        series = box_smooth_series(series, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        series = self._gaussian_smooth_series(series, window_size)
+                        series = gaussian_smooth_series(series, window_size)
                 smoothed = series
                 for i in range(len(self.body_pose_params)):
                     self.body_pose_params[i].copy_(smoothed[i])
@@ -856,11 +665,11 @@ class VideoBodyObjectOptimizer:
                 series = [p.data for p in self.shape_params]
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        series = self._ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
+                        series = ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        series = self._box_smooth_series(series, window_size)
+                        series = box_smooth_series(series, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        series = self._gaussian_smooth_series(series, window_size)
+                        series = gaussian_smooth_series(series, window_size)
                 smoothed = series
                 for i in range(len(self.shape_params)):
                     self.shape_params[i].copy_(smoothed[i])
@@ -868,11 +677,11 @@ class VideoBodyObjectOptimizer:
                 series = [p.data for p in self.left_hand_params]
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        series = self._ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
+                        series = ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        series = self._box_smooth_series(series, window_size)
+                        series = box_smooth_series(series, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        series = self._gaussian_smooth_series(series, window_size)
+                        series = gaussian_smooth_series(series, window_size)
                 smoothed = series
                 for i in range(len(self.left_hand_params)):
                     self.left_hand_params[i].copy_(smoothed[i])
@@ -880,11 +689,11 @@ class VideoBodyObjectOptimizer:
                 series = [p.data for p in self.right_hand_params]
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        series = self._ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
+                        series = ema_smooth_series(series, alpha=alpha, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        series = self._box_smooth_series(series, window_size)
+                        series = box_smooth_series(series, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        series = self._gaussian_smooth_series(series, window_size)
+                        series = gaussian_smooth_series(series, window_size)
                 smoothed = series
                 for i in range(len(self.right_hand_params)):
                     self.right_hand_params[i].copy_(smoothed[i])                         
@@ -906,11 +715,11 @@ class VideoBodyObjectOptimizer:
                 qs = q_list
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        qs = self._smooth_quaternion_sequence(qs, beta=beta_quat, bidirectional=bidirectional)
+                        qs = smooth_quaternion_sequence(qs, beta=beta_quat, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        qs = self._box_smooth_quaternion_sequence(qs, window_size)
+                        qs = box_smooth_quaternion_sequence(qs, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        qs = self._gaussian_smooth_quaternion_sequence(qs, window_size)
+                        qs = gaussian_smooth_quaternion_sequence(qs, window_size)
                 q_sm = qs
                 for i in range(len(q_sm)):
                     self.R_total_frames[i] = quaternion_to_rotation_matrix(q_sm[i])
@@ -920,11 +729,11 @@ class VideoBodyObjectOptimizer:
                 ts = t_list
                 if method in ('ema', 'ema_box', 'gaussian'):
                     for _ in range(max(1, int(ema_passes))):
-                        ts = self._ema_smooth_series(ts, alpha=alpha, bidirectional=bidirectional)
+                        ts = ema_smooth_series(ts, alpha=alpha, bidirectional=bidirectional)
                     if method == 'ema_box' and window_size and window_size > 1:
-                        ts = self._box_smooth_series(ts, window_size)
+                        ts = box_smooth_series(ts, window_size)
                     if method == 'gaussian' and window_size and window_size > 1:
-                        ts = self._gaussian_smooth_series(ts, window_size)
+                        ts = gaussian_smooth_series(ts, window_size)
                 t_sm = ts
                 for i in range(len(t_sm)):
                     self.T_total_frames[i] = t_sm[i]
@@ -980,7 +789,7 @@ class VideoBodyObjectOptimizer:
         human_faces = np.array(self.get_body_faces(sampled=True), dtype=np.int32)
         obj_faces= np.array(self.sampled_obj_meshes[0].triangles, dtype=np.int32)
                                                                               
-        renderer = Renderer(self.width, self.height, device=self.device,faces_human=human_faces,faces_obj=obj_faces,K=K)
+        renderer = Renderer(self.width, self.height, device="cuda",faces_human=human_faces,faces_obj=obj_faces,K=K)
         for i in tqdm(range(0, self.seq_length, 2), desc="rendering frames"):
             human_verts = self.get_body_points(i, sampled=True)
             object_mesh = self.sampled_obj_meshes[i]
@@ -1024,8 +833,7 @@ class VideoBodyObjectOptimizer:
         R_final = torch.mm(R_residual, R_icp)
         t_residual = self.obj_transl_params[frame_idx]
         t_icp = self.icp_obj_transl[frame_idx]
-        abs_idx = frame_idx + self.start_frame
-        depth_centers = torch.tensor(self.centers_depth[abs_idx], dtype=torch.float32, device=R_final.device)
+        depth_centers = torch.zeros(3, dtype=torch.float32, device=R_final.device)
         t_final = torch.mv(R_final, depth_centers) + torch.mv(R_residual, t_icp) + t_residual
         return R_final, t_final               
     def get_optimize_result(self):

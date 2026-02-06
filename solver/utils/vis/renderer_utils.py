@@ -1,7 +1,7 @@
 from hmr4d.utils.vis.renderer import Renderer
 from tqdm import tqdm
 import numpy as np
-import torch
+
 
 def simple_render_mesh(render_dict):
     """Render an camera-space mesh, blank background"""
@@ -9,11 +9,10 @@ def simple_render_mesh(render_dict):
     faces = render_dict["faces"]
     verts = render_dict["verts"]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    renderer = Renderer(width, height, focal_length, device=device, faces=faces)
+    renderer = Renderer(width, height, focal_length, device="cuda", faces=faces)
     outputs = []
     for i in tqdm(range(len(verts)), desc=f"Rendering"):
-        img = renderer.render_mesh(verts[i].to(device), colors=[0.8, 0.8, 0.8])
+        img = renderer.render_mesh(verts[i].cuda(), colors=[0.8, 0.8, 0.8])
         outputs.append(img)
     outputs = np.stack(outputs, axis=0)
     return outputs
@@ -30,11 +29,10 @@ def simple_render_mesh_background(render_dict, VI=50, colors=[0.8, 0.8, 0.8]):
         background = [background] * N_frames
     height, width = background[0].shape[:2]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    renderer = Renderer(width, height, device=device, faces=faces, K=K)
+    renderer = Renderer(width, height, device="cuda", faces=faces, K=K)
     outputs = []
     for i in tqdm(range(len(verts)), desc=f"Rendering"):
-        img = renderer.render_mesh(verts[i].to(device), colors=colors, background=background[i], VI=VI)
+        img = renderer.render_mesh(verts[i].cuda(), colors=colors, background=background[i], VI=VI)
         outputs.append(img)
     outputs = np.stack(outputs, axis=0)
     return outputs
