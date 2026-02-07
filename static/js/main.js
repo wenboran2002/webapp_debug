@@ -195,43 +195,57 @@ $(document).ready(function() {
     // Optimization Button Handler（仅优化到当前帧）
     $('#btn-optimize').click(function() {
         const btn = $(this);
+        if (btn.data('running')) {
+            return; // Prevent double-clicks while a run is active
+        }
+
+        const originalText = btn.text();
+        const restoreButton = () => {
+            btn.data('running', false);
+            btn.prop('disabled', false);
+            btn.text(originalText);
+        };
+
+        btn.data('running', true);
         btn.prop('disabled', true);
-        
-        // 1. Save merged annotations first
-        saveMergedAnnotations(function(success) {
-            if (!success) {
-                alert('Failed to save annotations before optimization.');
-                btn.prop('disabled', false);
-                return;
-            }
-            
-            // 2. Run optimization limited to current frame
-            $.ajax({
-                url: 'api/run_optimization',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                    frame_idx: currentFrame,
-                    last_frame: currentFrame
-                }),
-                success: function(response) {
-                    if (response.status === 'success') {
-                        console.log('Optimization completed successfully!');
-                        // Reload scene data to show updated results
-                        updateSceneData(currentFrame);
-                    } else {
-                        alert('Optimization failed: ' + (response.message || 'Unknown error'));
-                    }
-                },
-                error: function(xhr, status, error) {
-                    console.error('Optimization error:', error);
-                    alert('Error running optimization: ' + error);
-                },
-                complete: function() {
-                    btn.prop('disabled', false);
-                }
+        btn.text('Optimizing...');
+
+        // 1. Save merged annotations first (returns jqXHR)
+        const saveReq = saveMergedAnnotations();
+
+        saveReq
+            .done(function() {
+                // 2. Run optimization limited to current frame
+                $.ajax({
+                    url: 'api/run_optimization',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        frame_idx: currentFrame,
+                        last_frame: currentFrame
+                    }),
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            alert('Optimization completed successfully!');
+                            // Reload scene data to show updated results
+                            updateSceneData(currentFrame);
+                        } else {
+                            alert('Optimization failed: ' + (response.message || 'Unknown error'));
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('Optimization error:', error);
+                        const msg = (xhr.responseJSON && xhr.responseJSON.message) || error || status;
+                        alert('Error running optimization: ' + msg);
+                    },
+                    complete: restoreButton
+                });
+            })
+            .fail(function(xhr, status, error) {
+                const msg = (xhr && xhr.responseJSON && xhr.responseJSON.error) || error || status || 'Unknown error';
+                alert('Failed to save annotations before optimization: ' + msg);
+                restoreButton();
             });
-        });
     });
     
 
@@ -2163,25 +2177,32 @@ $(document).ready(function() {
             last_frame: currentFrame // Optional: limit saving to current frame
         };
 
-        $.ajax({
+        const req = $.ajax({
             url: 'api/save_merged_annotations',
             type: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify(payload),
-            success: function(response) {
-                if (response.status === 'success') {
-                    console.log('Merged annotations saved to:', response.path);
-                    if (callback) callback(true);
-                } else {
-                    console.error('Failed to save merged annotations:', response);
-                    if (callback) callback(false);
-                }
-            },
-            error: function(xhr, status, error) {
-                console.error('Error saving merged annotations:', error);
-                if (callback) callback(false);
-            }
+            data: JSON.stringify(payload)
         });
+
+        // Support existing callback usage
+        if (callback) {
+            req
+                .done(function(response) {
+                    if (response.status === 'success') {
+                        console.log('Merged annotations saved to:', response.path);
+                        callback(true);
+                    } else {
+                        console.error('Failed to save merged annotations:', response);
+                        callback(false);
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    console.error('Error saving merged annotations:', error || status);
+                    callback(false);
+                });
+        }
+
+        return req;
     }
 
     function saveAnnotation() {
