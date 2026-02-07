@@ -98,7 +98,7 @@ def kp_use_new(
         else:
             object_points.append(np.array([]))
             image_points.append(np.array([]))
-        object_idx = np.zeros((74, 2))
+        object_idx = np.zeros((87, 2))
         for k, annot_index in annotation.items():
             if k == "2D_keypoint":
                 continue
