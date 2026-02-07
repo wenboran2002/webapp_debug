@@ -308,6 +308,12 @@ $(document).ready(function() {
         function renderButtons() {
             const naturalWidth = img[0].naturalWidth;
             const naturalHeight = img[0].naturalHeight;
+
+            // Fine-tuning offsets (in ORIGINAL IMAGE pixels).
+            // If buttons appear shifted (e.g., down-left), adjust these small values.
+            // Typical ranges: -30..30
+            const HUMAN_BTN_OFFSET_X = 0;
+            const HUMAN_BTN_OFFSET_Y = 0;
             
             // Use a fixed reference size for scaling logic to match original coordinates
             // The original app likely used 480x480 as the display size for the coordinates.
@@ -315,7 +321,6 @@ $(document).ready(function() {
             
             // Get current container dimensions
             const containerWidth = container.width();
-            const containerHeight = container.height();
             
             // Calculate scale factor based on how much the container has shrunk/grown relative to reference
             // Assuming the image fills the container and maintains aspect ratio (square)
@@ -326,47 +331,16 @@ $(document).ready(function() {
 
             for (const [jointName, coords] of Object.entries(mainJointCoords)) {
                 let [realX, realY] = coords;
-                
-                // Apply offsets from app_new.py logic (these are in original image coordinates?)
-                // Or are they in the 480x480 space?
-                // The original code: scaleX = (realX / naturalWidth) * displayWidth;
-                // If naturalWidth is the original image width, and displayWidth is 480.
-                // Let's stick to the proportional logic but use current container size.
-                
-                realX = realX - 40;
-                realY = realY + 70;
-                
-                if (jointName === "leftNeck") {
-                    realX = realX + 25;
-                }
-                if (jointName === "rightNeck") {
-                    realX = realX - 25;
-                }
+
+                // Apply small global offsets in the original image coordinate space.
+                realX = realX + HUMAN_BTN_OFFSET_X;
+                realY = realY + HUMAN_BTN_OFFSET_Y;
 
                 // Calculate position as percentage of container
                 // This makes it responsive to any size
                 let percentX = (realX / naturalWidth) * 100;
                 let percentY = (realY / naturalHeight) * 100;
                 
-                // Adjust Y for specific joints (offset in pixels originally, now needs to be relative or scaled)
-                // Original: scaleY -= 20 (pixels in 480px space)
-                const legJoints = ["leftLowerLeg", "leftFoot", "rightLowerLeg", "rightFoot"];
-                let yOffsetPercent = 0;
-                if (legJoints.includes(jointName)) {
-                    // 20px out of 480px is approx 4.16%
-                    yOffsetPercent = (20 / 480) * 100; 
-                    // Wait, original code subtracted 20 from scaleY.
-                    // scaleY = (realY / naturalHeight) * displayHeight - 10;
-                    // So total offset was -10 - 20 = -30 for legs.
-                    // And -10 for others.
-                }
-                
-                // Base offset -10px (approx 2%)
-                let baseOffsetPercent = (10 / 480) * 100;
-                
-                percentY -= baseOffsetPercent;
-                percentY -= yOffsetPercent;
-
                 const btnLabel = buttonNames[jointName] || jointName;
                 
                 const btn = $('<div class="joint-btn"></div>')
