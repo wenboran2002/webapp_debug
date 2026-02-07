@@ -89,11 +89,21 @@ def solve_weighted_priority(
         weight_2d,
     )
 
+    # SciPy LM requires m >= n (num residuals >= num variables). When constraints
+    # are sparse (e.g. only a couple of 2D points), fall back to TRF so we can
+    # return a best-effort solution (or a clear upstream validation error).
+    method = 'lm'
+    try:
+        if residuals.size < x0.size:
+            method = 'trf'
+    except Exception:
+        method = 'trf'
+
     res = least_squares(
         residuals_weighted_priority,
         x0,
         args=(pts_3d_3d_src, pts_3d_3d_tgt, pts_3d_2d_src, pts_2d_tgt, K, T_ext, weight_3d, weight_2d),
-        method='lm'
+        method=method,
     )
     rvec_opt = res.x[:3]
     tvec_opt = res.x[3:]

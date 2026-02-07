@@ -1808,6 +1808,20 @@ def save_merged_annotations():
     invalid_frames = []
     first_annotated_frame = None
 
+    # For DoF validation, only count 3D joints that the solver actually uses
+    # (i.e., keys present in part_kp.json / human_part). Otherwise we may
+    # accept a merged file that later becomes underconstrained in optimization.
+    valid_human_part_keys = None
+    try:
+        part_kp_path = os.path.join(app.root_path, 'solver', 'data', 'part_kp.json')
+        if os.path.exists(part_kp_path):
+            with open(part_kp_path, 'r', encoding='utf-8') as f:
+                _hp = json.load(f) or {}
+            if isinstance(_hp, dict):
+                valid_human_part_keys = set(_hp.keys())
+    except Exception:
+        valid_human_part_keys = None
+
     try:
         if joint_keyframes or tracks:
             # Build from in-memory annotations provided by the frontend
@@ -1882,7 +1896,10 @@ def save_merged_annotations():
                 frame_kp['2D_keypoint'] = two_d_list
 
                 num_2d = len(two_d_list)
-                num_3d = len([k for k in frame_kp.keys() if k != '2D_keypoint'])
+                if valid_human_part_keys is None:
+                    num_3d = len([k for k in frame_kp.keys() if k != '2D_keypoint'])
+                else:
+                    num_3d = len([k for k in frame_kp.keys() if (k != '2D_keypoint' and k in valid_human_part_keys)])
                 has_annotation = (num_2d > 0) or (num_3d > 0)
 
                 if has_annotation and first_annotated_frame is None:
@@ -2042,6 +2059,48 @@ def run_optimization():
 
     with open(part_kp_path, 'r') as f:
         human_part = json.load(f)
+
+    # Early validation: ensure the merged annotations provide enough constraints
+    # for the solver over the optimization window. This prevents obscure SciPy
+    # errors (e.g., LM requiring m>=n) when effective DoF is too small.
+    try:
+        valid_keys = set(human_part.keys()) if isinstance(human_part, dict) else set()
+        with open(kp_record_path, 'r', encoding='utf-8') as f:
+            merged_for_check = json.load(f) or {}
+
+        insufficient = []
+        for frame_idx in range(start_frame, end_frame):
+            key = f"{frame_idx:05d}"
+            ann = merged_for_check.get(key) or {}
+
+            two_d = ann.get('2D_keypoint') or []
+            n2 = len(two_d)
+            n3 = 0
+            ignored = []
+            for k in ann.keys():
+                if k == '2D_keypoint':
+                    continue
+                if k in valid_keys:
+                    n3 += 1
+                else:
+                    ignored.append(k)
+
+            dof = 2 * n2 + 3 * n3
+            if dof < 6:
+                insufficient.append((frame_idx, dof, n3, n2, ignored[:5]))
+
+        if insufficient:
+            # Show a compact message for the first few bad frames
+            lines = ["Insufficient effective DoF for optimization (need >= 6)."]
+            for (fi, dof, n3, n2, ign) in insufficient[:5]:
+                extra = f"; ignored_3d_keys={ign}" if ign else ""
+                lines.append(f"Frame {fi}: DoF={dof} (valid3D={n3}x3, 2D={n2}x2){extra}")
+            if len(insufficient) > 5:
+                lines.append(f"... and {len(insufficient) - 5} more frames")
+            return jsonify({'status': 'error', 'message': "\n".join(lines)})
+    except Exception:
+        # Don't block optimization if validation fails unexpectedly
+        pass
 
     # Prepare K
     width = int(CAP.get(cv2.CAP_PROP_FRAME_WIDTH))
