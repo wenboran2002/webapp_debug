@@ -210,42 +210,65 @@ $(document).ready(function() {
         btn.prop('disabled', true);
         btn.text('Optimizing...');
 
-        // 1. Save merged annotations first (returns jqXHR)
-        const saveReq = saveMergedAnnotations();
+        try {
+            // 1. Save merged annotations first (no progress update here)
+            const saveReq = saveMergedAnnotations(null, { update_progress: false });
 
-        saveReq
-            .done(function() {
-                // 2. Run optimization limited to current frame
-                $.ajax({
-                    url: 'api/run_optimization',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({
-                        frame_idx: currentFrame,
-                        last_frame: currentFrame
-                    }),
-                    success: function(response) {
-                        if (response.status === 'success') {
-                            alert('Optimization completed successfully!');
-                            // Reload scene data to show updated results
-                            updateSceneData(currentFrame);
-                        } else {
-                            alert('Optimization failed: ' + (response.message || 'Unknown error'));
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.error('Optimization error:', error);
-                        const msg = (xhr.responseJSON && xhr.responseJSON.message) || error || status;
-                        alert('Error running optimization: ' + msg);
-                    },
-                    complete: restoreButton
-                });
-            })
-            .fail(function(xhr, status, error) {
-                const msg = (xhr && xhr.responseJSON && xhr.responseJSON.error) || error || status || 'Unknown error';
-                alert('Failed to save annotations before optimization: ' + msg);
+            if (!saveReq || typeof saveReq.done !== 'function') {
+                alert('Failed to start save request before optimization.');
                 restoreButton();
-            });
+                return;
+            }
+
+            saveReq
+                .done(function() {
+                    try {
+                        // 2. Run optimization limited to current frame
+                        const optReq = $.ajax({
+                            url: 'api/run_optimization',
+                            type: 'POST',
+                            contentType: 'application/json',
+                            data: JSON.stringify({
+                                frame_idx: currentFrame,
+                                last_frame: currentFrame
+                            })
+                        });
+
+                        optReq
+                            .done(function(response) {
+                                if (response.status === 'success') {
+                                    alert('Optimization completed successfully!');
+                                    try {
+                                        updateSceneData(currentFrame);
+                                    } catch (e) {
+                                        console.warn('updateSceneData failed:', e);
+                                    }
+                                } else {
+                                    alert('Optimization failed: ' + (response.message || 'Unknown error'));
+                                }
+                            })
+                            .fail(function(xhr, status, error) {
+                                console.error('Optimization error:', error);
+                                const msg = (xhr.responseJSON && xhr.responseJSON.message) || error || status;
+                                alert('Error running optimization: ' + msg);
+                            })
+                            .always(restoreButton);
+                    } catch (e) {
+                        console.error('Failed to start optimization request:', e);
+                        alert('Error starting optimization: ' + (e && e.message ? e.message : String(e)));
+                        restoreButton();
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    const msg = (xhr && xhr.responseJSON && xhr.responseJSON.error) || error || status || 'Unknown error';
+                    alert('Failed to save annotations before optimization: ' + msg);
+                    restoreButton();
+                });
+        } catch (e) {
+            console.error('Optimize click handler failed:', e);
+            alert('Optimize failed: ' + (e && e.message ? e.message : String(e)));
+            restoreButton();
+        }
     });
     
 
@@ -1158,7 +1181,7 @@ $(document).ready(function() {
             } else {
                 $('#hoi-status').text('保存失败，请重试');
             }
-        });
+        }, { update_progress: true });
     });
     
     // Scale slider debounce timer
@@ -2167,14 +2190,24 @@ $(document).ready(function() {
         }
     }
 
-    function saveMergedAnnotations(callback) {
+    function saveMergedAnnotations(callback, options) {
+        const opts = options || {};
+
+        // Avoid ReferenceError when called before globals are initialized.
+        const safeJointKeyframes = (typeof jointKeyframesByObj !== 'undefined' && jointKeyframesByObj) ? jointKeyframesByObj : {};
+        const safeVisibilityKeyframes = (typeof visibilityKeyframesByObj !== 'undefined' && visibilityKeyframesByObj) ? visibilityKeyframesByObj : {};
+        const safeTracks = (typeof objPointToTrack !== 'undefined' && objPointToTrack) ? objPointToTrack : {};
+        const safeTotalFrames = (typeof totalFrames !== 'undefined' && Number.isFinite(totalFrames)) ? totalFrames : null;
+        const safeCurrentFrame = (typeof currentFrame !== 'undefined' && Number.isFinite(currentFrame)) ? currentFrame : null;
+
         // Prepare payload with all in-memory annotations
         const payload = {
-            joint_keyframes: jointKeyframesByObj,
-            visibility_keyframes: visibilityKeyframesByObj,
-            tracks: objPointToTrack,
-            total_frames: totalFrames,
-            last_frame: currentFrame // Optional: limit saving to current frame
+            joint_keyframes: safeJointKeyframes,
+            visibility_keyframes: safeVisibilityKeyframes,
+            tracks: safeTracks,
+            total_frames: safeTotalFrames,
+            last_frame: safeCurrentFrame, // Optional: limit saving to current frame
+            update_progress: !!opts.update_progress
         };
 
         const req = $.ajax({

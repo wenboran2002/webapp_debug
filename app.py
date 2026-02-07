@@ -1726,7 +1726,10 @@ def save_merged_annotations():
       frames from the first annotated frame onward.
 
     Request JSON (optional):
-        { "is_static_object": bool }
+        {
+            "is_static_object": bool,
+            "update_progress": bool  # default False; only set True when user explicitly clicks “保存标注”
+        }
 
     Response JSON on success:
         {
@@ -1739,6 +1742,7 @@ def save_merged_annotations():
     global SCENE_DATA, VIDEO_PATH
 
     payload = request.get_json(silent=True) or {}
+    update_progress = bool(payload.get('update_progress', False))
 
     # Determine video directory
     video_dir = None
@@ -1975,8 +1979,9 @@ def save_merged_annotations():
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
 
-        # 标注合并成功后，将对应视频的 annotation_progress 置为 3.0
-        _update_hoi_progress_for_video_dir(video_dir, finished=True)
+        # Only update progress when explicitly requested by the user.
+        if update_progress:
+            _update_hoi_progress_for_video_dir(video_dir, finished=True)
 
         return jsonify({
             'status': 'success',
