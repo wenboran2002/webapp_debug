@@ -14,7 +14,7 @@ from copy import deepcopy
 
 APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parent
-AUTH_DIR = PROJECT_ROOT / "4d_preprocess_debug"
+AUTH_DIR = PROJECT_ROOT / "4dhoi_autorecon"
 if str(AUTH_DIR) not in sys.path:
     sys.path.insert(0, str(AUTH_DIR))
 

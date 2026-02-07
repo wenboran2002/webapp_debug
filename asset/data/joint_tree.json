@@ -105,5 +105,7 @@
   ],
   "hip": ["hip_front", "hip_left", "hip_front", "hip_back"],
   "buttocks_left": ["buttocks_left"],
-  "buttocks_right":["buttocks_right"]
+  "buttocks_right":["buttocks_right"],
+  "rightKnee":["rightKnee_front", "rightKnee_back"],
+  
 }
