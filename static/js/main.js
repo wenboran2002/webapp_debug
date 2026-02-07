@@ -1136,6 +1136,11 @@ $(document).ready(function() {
                 currentSessionFolder = selectedSessionFolder;
                 frameCacheKey = Date.now(); // bust cached frames for new session
                 preloadCache.clear();
+
+                // IMPORTANT: fully reset client-side state so the next session is clean
+                // (avoid leftover 2D points, old tracks/keyframes, stuck modes/modals, etc.)
+                resetClientStateForNewSession();
+
                 hasCheckedScale = false; // force scale review for each new session
                 lastAppliedScale = 1.0;
                 resetScaleViewerTransform();
@@ -1154,6 +1159,104 @@ $(document).ready(function() {
                 loadHoiTasks();
             }
         });
+    }
+
+    function clearCanvasById(id) {
+        const canvas = document.getElementById(id);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function resetClientStateForNewSession() {
+        // Stop playback/timers
+        isPlaying = false;
+        if (playInterval) {
+            clearInterval(playInterval);
+            playInterval = null;
+        }
+        if (playAnimationFrameId !== null) {
+            cancelAnimationFrame(playAnimationFrameId);
+            playAnimationFrameId = null;
+        }
+        if (sliderUpdateTimeout) {
+            clearTimeout(sliderUpdateTimeout);
+            sliderUpdateTimeout = null;
+        }
+        if (dragDebounceTimer) {
+            clearTimeout(dragDebounceTimer);
+            dragDebounceTimer = null;
+        }
+        $('#play-pause').text('▶ Play').removeClass('playing');
+
+        // Close any open modals to avoid overlay residue
+        $('#annotation-modal').hide();
+        $('#magnify-modal').hide();
+        $('#scale-modal').hide();
+
+        // Reset annotation data
+        totalFrames = 0;
+        currentFrame = 0;
+        selectedPoints = [];
+        activeObjectPointIndex = -1;
+        humanKeypoints = {};
+        objPointToJoint = {};
+        objPointToTrack = {};
+        jointKeyframesByObj = {};
+        visibilityKeyframesByObj = {};
+        pending2DPoint = null;
+        pending2DPoints = {};
+        selectedJointName = null;
+
+        // Reset UI bits
+        currentMode = 'view';
+        $('.mode-btn').removeClass('active');
+        $('#mode-view').addClass('active');
+        $('#selected-joint-display').text('');
+        $('#2d-status').text('');
+        $('#btn-track-2d').prop('disabled', true);
+        $('#btn-track-2d-all').prop('disabled', true);
+
+        // Clear overlay canvases immediately
+        clearCanvasById('main-video-overlay');
+        clearCanvasById('modal-video-overlay');
+
+        // Reset scale viewer cached scene so it can't carry over
+        scaleViewerState.baseHuman = null;
+        scaleViewerState.baseObject = null;
+        scaleViewerState.baseScaleFactor = 1.0;
+        scaleViewerState.baseDiag = 1;
+        scaleViewerState.layout = null;
+        scaleViewerState.activeMode = null;
+        scaleViewerState.lastMouse = null;
+        scaleViewerState.camera = {
+            eye: { x: 1.25, y: 1.25, z: 1.25 },
+            up: { x: 0, y: 0, z: 1 },
+            center: { x: 0, y: 0, z: 0 }
+        };
+        $('#scale-status').text('');
+
+        // Reset Plotly state so old traces can't be re-used
+        meshData = null;
+        meshTrace = null;
+        scatterTrace = null;
+        humanTrace = null;
+        layout = null;
+
+        try {
+            const gd3d = document.getElementById('3d-viewer');
+            if (gd3d) Plotly.purge(gd3d);
+        } catch (e) {
+            // ignore
+        }
+
+        try {
+            const gdScale = document.getElementById('scale-viewer');
+            if (gdScale) Plotly.purge(gdScale);
+        } catch (e) {
+            // ignore
+        }
     }
 
     function pickNextHoiSession(prevSessionFolder) {
@@ -1778,6 +1881,12 @@ $(document).ready(function() {
                     
                     // Check each selected point
                     for (const pt of selectedPoints) {
+                        // If a point is hidden from this frame onward (e.g. deleted via Manage Points),
+                        // it should not block selecting new points.
+                        if (!isObjectVisibleAtFrame(pt.index, currentFrame)) {
+                            continue;
+                        }
+
                         const objIdx = pt.index;
                         // Check if this point has 2D point selected (in pending2DPoints) or completed tracking
                         const has2DPointSelected = !!pending2DPoints[objIdx];
