@@ -1047,9 +1047,13 @@ $(document).ready(function() {
 
     // ---------------- HOI 标注任务相关（progress 2.0 列表 + 开始/结束按钮） ----------------
 
+    // Keep the most recently fetched HOI task list (progress=2.0)
+    let lastHoiTasks = [];
+
     function loadHoiTasks() {
-        $.getJSON('api/hoi_tasks', function(resp) {
+        return $.getJSON('api/hoi_tasks', function(resp) {
             const list = resp.tasks || [];
+            lastHoiTasks = list;
             renderHoiList(list);
         }).fail(function(xhr) {
             console.error('Failed to load HOI tasks:', xhr.responseJSON || xhr.statusText);
@@ -1070,12 +1074,23 @@ $(document).ready(function() {
             const fileName = rec.file_name || rec.file_path || 'unknown';
             const objectCategory = rec.object_category || '-';
             const sf = rec.session_folder || '';
+            const locked = !!rec._locked;
+            const lockedBy = rec._locked_by;
+            const lockedByMe = !!rec._locked_by_me;
+
+            let lockText = '';
+            if (locked) {
+                lockText = lockedByMe ? '我在标注' : ('标注中: ' + (lockedBy || 'unknown'));
+            }
 
             const item = $(`
                 <div class="hoi-item" data-session-folder="${sf}"
                      style="padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 13px; background: #fafafa;">
-                    <div style="font-weight: 600; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                        ${fileName}
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                        <div style="font-weight: 600; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            ${fileName}
+                        </div>
+                        ${lockText ? `<div style="font-size: 11px; padding: 2px 6px; border-radius: 999px; white-space: nowrap; ${lockedByMe ? 'background:#e7f5ff;color:#1971c2;border:1px solid #a5d8ff;' : 'background:#fff5f5;color:#c92a2a;border:1px solid #ffc9c9;'}">${lockText}</div>` : ''}
                     </div>
                     <div style="font-size: 12px; color: #777; display: flex; justify-content: space-between; gap: 6px;">
                         <span>Obj: ${objectCategory}</span>
@@ -1095,15 +1110,7 @@ $(document).ready(function() {
         });
     }
 
-    $('#hoi-search').on('input', function() {
-        const q = $(this).val().trim().toLowerCase();
-        $('#hoi-video-list .hoi-item').each(function() {
-            const text = $(this).text().toLowerCase();
-            $(this).toggle(text.indexOf(q) !== -1);
-        });
-    });
-
-    $('#btn-hoi-start').on('click', function() {
+    function startHoiSession(sessionFolder) {
         if (!currentUser) {
             promptLogin(function(ok) {
                 if (ok) {
@@ -1112,10 +1119,12 @@ $(document).ready(function() {
             });
             return;
         }
-        if (!selectedSessionFolder) {
+        if (!sessionFolder) {
             $('#hoi-status').text('请先在左侧选择一个视频');
             return;
         }
+
+        selectedSessionFolder = sessionFolder;
         $('#hoi-status').text('正在加载视频与场景数据...');
         $('#scene-status').text('Scene: initializing...');
         $.ajax({
@@ -1125,35 +1134,107 @@ $(document).ready(function() {
             data: JSON.stringify({ session_folder: selectedSessionFolder }),
             success: function(resp) {
                 currentSessionFolder = selectedSessionFolder;
-            frameCacheKey = Date.now(); // bust cached frames for new session
-            preloadCache.clear();
+                frameCacheKey = Date.now(); // bust cached frames for new session
+                preloadCache.clear();
                 hasCheckedScale = false; // force scale review for each new session
                 lastAppliedScale = 1.0;
                 resetScaleViewerTransform();
                 $('#hoi-status').text('加载成功，正在刷新视频与场景...');
                 $('#scene-status').text('Scene: loading metadata & first frame...');
-                // 刷新元数据与 3D mesh
                 fetchMetadata();
                 loadMesh();
+                // Refresh list so lock owner display is up-to-date
+                loadHoiTasks();
             },
             error: function(xhr) {
                 const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
                 $('#hoi-status').text('开始标注失败：' + msg);
                 $('#scene-status').text('Scene: error – ' + msg);
+                // Refresh list to show lock owner
+                loadHoiTasks();
             }
         });
+    }
+
+    function pickNextHoiSession(prevSessionFolder) {
+        // Prefer next item after prev in the last list; fall back to first unlocked.
+        const list = lastHoiTasks || [];
+        if (!list.length) return null;
+
+        const prevIdx = list.findIndex(r => (r.session_folder || '') === (prevSessionFolder || ''));
+        const candidates = [];
+        if (prevIdx >= 0) {
+            for (let i = prevIdx + 1; i < list.length; i++) candidates.push(list[i]);
+            for (let i = 0; i <= prevIdx; i++) candidates.push(list[i]);
+        } else {
+            for (let i = 0; i < list.length; i++) candidates.push(list[i]);
+        }
+
+        // Prefer unlocked tasks
+        const nextUnlocked = candidates.find(r => !r._locked);
+        if (nextUnlocked) return nextUnlocked.session_folder;
+
+        // If all locked, return null (don't auto-steal)
+        return null;
+    }
+
+    $('#hoi-search').on('input', function() {
+        const q = $(this).val().trim().toLowerCase();
+        $('#hoi-video-list .hoi-item').each(function() {
+            const text = $(this).text().toLowerCase();
+            $(this).toggle(text.indexOf(q) !== -1);
+        });
+    });
+
+    $('#btn-hoi-start').on('click', function() {
+        startHoiSession(selectedSessionFolder);
     });
 
     // Quick save button
     $('#btn-save-merged').on('click', function() {
         const btn = $(this);
         btn.prop('disabled', true);
+        const prevSession = currentSessionFolder || selectedSessionFolder;
         saveMergedAnnotations(function(ok) {
-            btn.prop('disabled', false);
-            if (ok) {
-                $('#hoi-status').text('标注已保存');
-            } else {
+            if (!ok) {
+                btn.prop('disabled', false);
                 $('#hoi-status').text('保存失败，请重试');
+                return;
+            }
+
+            $('#hoi-status').text('标注已保存，准备跳转下一个视频...');
+
+            // Release lock for current session (best-effort)
+            const finishReq = prevSession
+                ? $.ajax({
+                    url: 'api/hoi_finish',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ session_folder: prevSession })
+                })
+                : null;
+
+            const afterRelease = () => {
+                // Refresh list and auto-start next
+                loadHoiTasks().always(function() {
+                    const nextSf = pickNextHoiSession(prevSession);
+                    btn.prop('disabled', false);
+
+                    if (!nextSf) {
+                        $('#hoi-status').text('已保存：没有可自动开始的下一个视频（可能都被别人锁定或已完成）');
+                        return;
+                    }
+
+                    // Select & start next
+                    selectedSessionFolder = nextSf;
+                    startHoiSession(nextSf);
+                });
+            };
+
+            if (finishReq) {
+                finishReq.always(afterRelease);
+            } else {
+                afterRelease();
             }
         }, { update_progress: true });
     });
