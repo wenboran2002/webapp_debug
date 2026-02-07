@@ -166,3 +166,36 @@ input:checked + .slider:before {
     transform: scale(1.2);
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.8);
 }
+
+/* Main page bottom controls: keep a single compact row */
+.video-panel .controls {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.video-panel .controls button,
+.video-panel .controls .btn-control,
+.video-panel .controls .btn-annotate {
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 7px;
+    flex: 0 0 auto;
+}
+
+.video-panel .controls .frame-slider-wrap {
+    flex: 1 1 220px;
+    min-width: 220px;
+}
+
+.video-panel .controls::-webkit-scrollbar {
+    height: 8px;
+}
+
+.video-panel .controls::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+}
