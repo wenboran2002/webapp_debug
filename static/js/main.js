@@ -43,7 +43,7 @@ $(document).ready(function() {
 
     // Scale-check state
     let hasCheckedScale = false; // forces user to open the Check Scale view before annotating
-    let scaleViewerControlsBound = false;
+    let scaleViewerDocControlsBound = false;
     let lastAppliedScale = 1.0;
     const scaleViewerState = {
         baseHuman: null,
@@ -1404,6 +1404,35 @@ $(document).ready(function() {
         return Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
     }
 
+    function computeBounds3D(obj) {
+        if (!obj || !obj.x || obj.x.length === 0) {
+            return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1 };
+        }
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        for (let i = 0; i < obj.x.length; i++) {
+            const x = obj.x[i];
+            const y = obj.y[i];
+            const z = obj.z[i];
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+        return { minX, maxX, minY, maxY, minZ, maxZ };
+    }
+
+    function mergeBounds3D(a, b) {
+        return {
+            minX: Math.min(a.minX, b.minX),
+            maxX: Math.max(a.maxX, b.maxX),
+            minY: Math.min(a.minY, b.minY),
+            maxY: Math.max(a.maxY, b.maxY),
+            minZ: Math.min(a.minZ, b.minZ),
+            maxZ: Math.max(a.maxZ, b.maxZ)
+        };
+    }
+
     function transformObjectMesh(baseObj) {
         if (!baseObj) return { x: [], y: [], z: [], i: [], j: [], k: [] };
         const { tx, ty, tz, yaw, pitch, roll, viewRoll } = scaleViewerState.transform;
@@ -1500,10 +1529,18 @@ $(document).ready(function() {
     }
 
     function bindScaleViewerControls() {
-        if (scaleViewerControlsBound) return;
-
+        // Plotly graph-level binding must be refreshed after Plotly.newPlot/Plotly.purge.
+        // Document-level bindings should only be installed once.
         const plotEl = document.getElementById('scale-viewer');
         if (plotEl && plotEl.on) {
+            try {
+                if (typeof plotEl.removeAllListeners === 'function') {
+                    plotEl.removeAllListeners('plotly_relayout');
+                }
+            } catch (e) {
+                // ignore
+            }
+
             plotEl.on('plotly_relayout', function(e) {
                 const cam = e?.['scene.camera'];
                 if (cam) {
@@ -1516,22 +1553,37 @@ $(document).ready(function() {
             });
         }
 
+        if (scaleViewerDocControlsBound) return;
+
         $(document).on('keydown', function(e) {
             if (!$('#scale-modal').is(':visible')) return;
-            const key = e.key.toLowerCase();
-            if (['g', 'r', 's'].includes(key)) {
-                scaleViewerState.activeMode = key;
-                scaleViewerState.lastMouse = null;
-                const label = key === 's' ? 'Scale (applies immediately, no reload)' : (key === 'g' ? 'Move (preview only, view-aligned plane)' : 'Rotate (preview only)');
-                $('#scale-status').text(`${label}: move mouse to adjust; press key again to switch/stop.`);
-            }
-        });
+            const key = (e.key || '').toLowerCase();
 
-        $(document).on('keyup', function(e) {
-            const key = e.key.toLowerCase();
-            if (['g', 'r', 's'].includes(key)) {
+            if (key === 'escape') {
                 scaleViewerState.activeMode = null;
                 scaleViewerState.lastMouse = null;
+                $('#scale-status').text('');
+                return;
+            }
+
+            if (['g', 'r', 's'].includes(key)) {
+                // Avoid toggling repeatedly due to key auto-repeat
+                if (e.repeat) return;
+
+                // Toggle mode on press (more intuitive than hold-to-act)
+                if (scaleViewerState.activeMode === key) {
+                    scaleViewerState.activeMode = null;
+                    scaleViewerState.lastMouse = null;
+                    $('#scale-status').text('');
+                    return;
+                }
+
+                scaleViewerState.activeMode = key;
+                scaleViewerState.lastMouse = null;
+                const label = key === 's'
+                    ? 'Scale (applies immediately, no reload)'
+                    : (key === 'g' ? 'Move (preview only, view-aligned plane)' : 'Rotate (preview only)');
+                $('#scale-status').text(`${label}: move mouse to adjust; press the same key again (or Esc) to stop.`);
             }
         });
 
@@ -1583,7 +1635,7 @@ $(document).ready(function() {
             }
         });
 
-        scaleViewerControlsBound = true;
+        scaleViewerDocControlsBound = true;
     }
 
     // Function to apply scale (updates backend; also used by mouse-scale gesture)
@@ -1685,10 +1737,23 @@ $(document).ready(function() {
             scaleViewerState.baseObject = object;
             scaleViewerState.baseScaleFactor = lastAppliedScale || 1.0;
             scaleViewerState.baseDiag = computeObjectDiag(object);
+
+            // Fix axis ranges to avoid Plotly autorange re-centering on every react.
+            // Otherwise preview translations look like they "reset" and are hard to perceive.
+            const hb = computeBounds3D(human);
+            const ob = computeBounds3D(object);
+            const bounds = mergeBounds3D(hb, ob);
+            const pad = Math.max(scaleViewerState.baseDiag || 1, computeObjectDiag(human) || 1) * 0.75;
+
             scaleViewerState.layout = {
+                // Keep UI state (camera/zoom) stable across Plotly.react calls
+                uirevision: 'scale-viewer',
                 scene: {
                     aspectmode: 'data',
-                    dragmode: 'orbit'
+                    dragmode: 'orbit',
+                    xaxis: { autorange: false, range: [bounds.minX - pad, bounds.maxX + pad] },
+                    yaxis: { autorange: false, range: [bounds.minY - pad, bounds.maxY + pad] },
+                    zaxis: { autorange: false, range: [bounds.minZ - pad, bounds.maxZ + pad] }
                 },
                 margin: { l: 0, r: 0, b: 0, t: 0 },
                 showlegend: true
