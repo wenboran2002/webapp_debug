@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>4DHOI Joint Picker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">4DHOI Joint Picker</div>
+    <div class="hint">左键拖拽点位；单击设置当前选中关节；滚轮缩放画布（或用缩放滑条）</div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel">
+      <section class="card">
+        <div class="card-title">资源</div>
+
+        <div class="row">
+          <label>图片</label>
+          <div class="row-right">
+            <button id="btn-load-default" class="btn">加载默认</button>
+            <input id="file-image" type="file" accept="image/*" />
+          </div>
+        </div>
+
+        <div class="row">
+          <label>关节 JSON</label>
+          <div class="row-right">
+            <button id="btn-load-main" class="btn">加载 main_joint.json</button>
+            <button id="btn-load-names" class="btn">加载按钮名</button>
+            <input id="file-joints" type="file" accept="application/json" />
+          </div>
+        </div>
+
+        <div class="row">
+          <label>缩放</label>
+          <div class="row-right">
+            <input id="zoom" type="range" min="0.25" max="3" value="1" step="0.05" />
+            <span id="zoom-label" class="mono">1.00×</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>半径</label>
+          <div class="row-right">
+            <input id="radius" type="range" min="2" max="20" value="7" step="1" />
+            <span id="radius-label" class="mono">7</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">关节</div>
+
+        <div class="row">
+          <label>搜索</label>
+          <div class="row-right">
+            <input id="search" type="text" placeholder="leftHand / hip ..." />
+          </div>
+        </div>
+
+        <div class="row">
+          <label>当前</label>
+          <div class="row-right">
+            <select id="joint-select"></select>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>坐标</label>
+          <div class="row-right">
+            <input id="coord-x" class="mono" type="number" step="1" />
+            <input id="coord-y" class="mono" type="number" step="1" />
+            <button id="btn-set-coord" class="btn">应用</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>新增</label>
+          <div class="row-right">
+            <input id="new-name" type="text" placeholder="jointName" />
+            <button id="btn-add" class="btn">添加</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>操作</label>
+          <div class="row-right">
+            <button id="btn-undo" class="btn">撤销</button>
+            <button id="btn-reset" class="btn btn-danger">重置</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>导出</label>
+          <div class="row-right">
+            <button id="btn-download" class="btn btn-primary">下载 JSON</button>
+            <button id="btn-copy" class="btn">复制 JSON</button>
+          </div>
+        </div>
+
+        <div class="small-note" id="status"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">列表</div>
+        <div id="joint-list" class="list"></div>
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="canvas"></canvas>
+      </div>
+      <div class="footer">
+        <div class="mono" id="cursor">x: -, y: -</div>
+        <div class="mono" id="selected">selected: -</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

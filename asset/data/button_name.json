@@ -19,6 +19,11 @@
   "leftFoot": "LF",
   "rightUpperLeg": "RUL",
   "rightLowerLeg": "RLL",
-  "rightFoot": "RF"
+  "rightFoot": "RF",
+  "Head": "Head",
+  "rightElbow": "REl",
+  "leftElbow": "LEl",
+  "rightKnee": "RKn",
+  "leftKnee": "LKn"
 }
 
