@@ -1137,6 +1137,73 @@ def hoi_finish():
     }), status_code
 
 
+@app.route('/api/hoi_mark_deleted', methods=['POST'])
+def hoi_mark_deleted():
+    """
+    将某个 session 标记为“删除/跳过”（annotation_progress = -1），并释放锁。
+    - 需要登录
+    - 需要该 session 的锁归当前用户持有（避免误操作别人的任务）
+    """
+    payload = request.get_json(silent=True) or {}
+    session_folder = payload.get('session_folder')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'error': 'session_folder is required'}), 400
+
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({'error': '未登录或缺少用户信息'}), 401
+
+    if not UPLOAD_RECORDS_PATH.exists():
+        return jsonify({'error': 'upload_records.json not found'}), 500
+
+    lock_key = _get_lock_key(session_folder)
+    user_name = _get_user_name() or user_id
+    acquired, acquire_msg = lock_manager.acquire(lock_key, user_id=user_id, user_name=user_name)
+    if not acquired:
+        return jsonify({'error': acquire_msg, 'locked': True}), 409
+
+    try:
+        records = _load_upload_records()
+    except Exception as e:
+        print(f"Failed to load upload_records.json in hoi_mark_deleted: {e}")
+        lock_manager.release(lock_key, user_id=user_id, force=True)
+        return jsonify({'error': 'failed to load upload_records.json'}), 500
+
+    target_idx = None
+    for i, rec in enumerate(records):
+        if str(rec.get('session_folder', '')) == session_folder:
+            target_idx = i
+            break
+
+    if target_idx is None:
+        lock_manager.release(lock_key, user_id=user_id, force=True)
+        return jsonify({'error': f'session_folder not found: {session_folder}'}), 404
+
+    try:
+        prog = float(records[target_idx].get('annotation_progress', 0))
+    except Exception:
+        prog = 0.0
+    if prog != 2.0:
+        lock_manager.release(lock_key, user_id=user_id, force=True)
+        return jsonify({'error': f'annotation_progress must be 2.0 to mark deleted, got {prog}'}), 400
+
+    records[target_idx]['annotation_progress'] = -1.0
+
+    try:
+        _write_upload_records(records)
+    except Exception as e:
+        print(f"Failed to write upload_records.json in hoi_mark_deleted: {e}")
+        lock_manager.release(lock_key, user_id=user_id, force=True)
+        return jsonify({'error': 'failed to write upload_records.json'}), 500
+
+    # Release lock (best-effort)
+    success, msg = lock_manager.release(lock_key, user_id=user_id)
+    if not success:
+        return jsonify({'error': msg, 'annotation_progress': -1.0}), 403
+
+    return jsonify({'ok': True, 'message': 'marked deleted', 'annotation_progress': -1.0})
+
+
 @app.route('/api/finalize_hoi_sessions', methods=['POST'])
 def finalize_hoi_sessions():
     """

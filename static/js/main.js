@@ -1341,6 +1341,54 @@ $(document).ready(function() {
             }
         }, { update_progress: true });
     });
+
+    // Delete/Skip current case: mark annotation_progress = -1 and auto-next
+    $('#btn-delete-case').on('click', function() {
+        const btn = $(this);
+        const prevSession = currentSessionFolder || selectedSessionFolder;
+
+        if (!prevSession) {
+            alert('未选择任何视频');
+            return;
+        }
+
+        const ok = confirm('确定要删除并跳过当前 case 吗？\n\n这会把 annotation_progress 设置为 -1，并自动跳转到下一个视频。');
+        if (!ok) return;
+
+        btn.prop('disabled', true);
+        $('#hoi-status').text('正在标记为删除并准备跳转...');
+
+        $.ajax({
+            url: 'api/hoi_mark_deleted',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ session_folder: prevSession })
+        }).done(function(resp) {
+            if (!resp || resp.ok !== true) {
+                $('#hoi-status').text('删除失败：接口返回异常');
+                btn.prop('disabled', false);
+                return;
+            }
+
+            // Refresh list and auto-start next
+            loadHoiTasks().always(function() {
+                const nextSf = pickNextHoiSession(prevSession);
+                btn.prop('disabled', false);
+
+                if (!nextSf) {
+                    $('#hoi-status').text('已删除：没有可自动开始的下一个视频（可能都被别人锁定或已完成）');
+                    return;
+                }
+
+                selectedSessionFolder = nextSf;
+                startHoiSession(nextSf);
+            });
+        }).fail(function(xhr) {
+            const msg = (xhr && xhr.responseJSON && xhr.responseJSON.error) ? xhr.responseJSON.error : '请求失败';
+            $('#hoi-status').text('删除失败：' + msg);
+            btn.prop('disabled', false);
+        });
+    });
     
     // Scale slider debounce timer
     let scaleSliderDebounceTimer = null;
