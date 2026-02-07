@@ -1743,17 +1743,32 @@ $(document).ready(function() {
             const hb = computeBounds3D(human);
             const ob = computeBounds3D(object);
             const bounds = mergeBounds3D(hb, ob);
-            const pad = Math.max(scaleViewerState.baseDiag || 1, computeObjectDiag(human) || 1) * 0.75;
+            const dx = bounds.maxX - bounds.minX;
+            const dy = bounds.maxY - bounds.minY;
+            const dz = bounds.maxZ - bounds.minZ;
+            const maxSpan = Math.max(dx, dy, dz, 1e-6);
+            const pad = Math.max(scaleViewerState.baseDiag || 1, computeObjectDiag(human) || 1) * 0.35;
+
+            // Use a uniform span for all axes so the scene doesn't look squashed
+            // when one axis range is much larger than the others.
+            const span = maxSpan + pad * 2;
+            const cx = (bounds.minX + bounds.maxX) / 2;
+            const cy = (bounds.minY + bounds.maxY) / 2;
+            const cz = (bounds.minZ + bounds.maxZ) / 2;
+            const xr = [cx - span / 2, cx + span / 2];
+            const yr = [cy - span / 2, cy + span / 2];
+            const zr = [cz - span / 2, cz + span / 2];
 
             scaleViewerState.layout = {
                 // Keep UI state (camera/zoom) stable across Plotly.react calls
                 uirevision: 'scale-viewer',
                 scene: {
-                    aspectmode: 'data',
+                    // Keep unit aspect; axis ranges below are uniform-span
+                    aspectmode: 'cube',
                     dragmode: 'orbit',
-                    xaxis: { autorange: false, range: [bounds.minX - pad, bounds.maxX + pad] },
-                    yaxis: { autorange: false, range: [bounds.minY - pad, bounds.maxY + pad] },
-                    zaxis: { autorange: false, range: [bounds.minZ - pad, bounds.maxZ + pad] }
+                    xaxis: { autorange: false, range: xr },
+                    yaxis: { autorange: false, range: yr },
+                    zaxis: { autorange: false, range: zr }
                 },
                 margin: { l: 0, r: 0, b: 0, t: 0 },
                 showlegend: true
