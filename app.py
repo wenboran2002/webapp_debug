@@ -1018,9 +1018,15 @@ def get_hoi_tasks():
             return 1
         else:
             return 2
-    tasks.sort(key=_upload_method_sort_key)
+    # tasks.sort(key=_upload_method_sort_key)
 
-    return jsonify({'tasks': tasks, 'total': len(tasks)})
+    # return jsonify({'tasks': tasks, 'total': len(tasks)})
+
+    # 只返回前 40 条待标注任务
+    tasks_limited = tasks[:40]
+
+    return jsonify({'tasks': tasks_limited, 'total': len(tasks)})
+
 
 
 @app.route('/api/hoi_start', methods=['POST'])
