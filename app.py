@@ -1009,6 +1009,17 @@ def get_hoi_tasks():
         )
         tasks.append(rec_with_lock)
 
+    # 按 upload_method 排序：tiktok 优先，self 在后
+    def _upload_method_sort_key(rec):
+        method = rec.get("upload_method", "")
+        if method == "tiktok":
+            return 0
+        elif method == "self":
+            return 1
+        else:
+            return 2
+    tasks.sort(key=_upload_method_sort_key)
+
     return jsonify({'tasks': tasks, 'total': len(tasks)})
 
 
