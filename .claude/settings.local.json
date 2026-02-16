@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "Bash(tree:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(chmod:*)",
+      "Bash(python fix_chin_case.py:*)",
+      "Bash(python -c:*)",
+      "Bash(python optimize.py:*)",
+      "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && head -20 {}')",
+      "Bash(for dir in /inspire/qb-ilm/project/robot-reasoning/xiangyushun-p-xiangyushun/boran/4dhoi_autorecon/tiktok_data/skateboard/*/output/obj_poses.json)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(xargs:*)",
+      "Bash(python3:*)",
+      "Bash(tee:*)",
+      "Bash(lsof:*)",
+      "Bash(curl:*)"
     ]
   }
 }

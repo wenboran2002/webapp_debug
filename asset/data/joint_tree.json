@@ -103,12 +103,12 @@
     "rightNeck_back",
     "rightNeck_front"
   ],
-  "hip": ["hip_front", "hip_left", "hip_front", "hip_back"],
+  "hip": ["hip_front", "hip_left", "hip_right", "hip_back"],
   "buttocks_left": ["buttocks_left"],
   "buttocks_right":["buttocks_right"],
   "rightKnee":["rightKnee_front", "rightKnee_back"],
   "leftKnee":["leftKnee_front", "leftKnee_back"],
-  "Head":["rightCheek", "leftCheek", "chin", "Head_top", "Mouth"],
+  "Head":["rightCheek", "leftCheek", "Chin", "Head_top", "Mouth"],
   "rightElbow":["rightElbow_front", "rightElbow_back"],
   "leftElbow":["leftElbow_front", "leftElbow_back"]
 }

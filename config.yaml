@@ -1,16 +1,20 @@
 # Webapp 常量配置（修改后需重启服务生效）
 
+# 标注者信息（每个用户副本应设置不同的值）
+annotator:
+  name: "boran"  # 标注者名称，用于视频锁定和记录
+
 # 物体网格减面（用于 3D 标注与优化）
 mesh:
   # 减面目标三角面数；越大越细腻，前端/优化越慢
-  obj_decimation_target_faces: 30000
+  obj_decimation_target_faces: 60000
   # 顶点数超过此值才做减面，否则保持原 mesh
-  obj_decimate_if_vertices_above: 5000
+  obj_decimate_if_vertices_above: 30000
 
 # 服务
 server:
   host: "0.0.0.0"
-  port: 5010
+  port: 5014
 
 # 视频（元数据缺失时的默认值）
 video:

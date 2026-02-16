@@ -49,6 +49,7 @@ app = Flask(__name__, static_folder='static')
 # 从 config.yaml 加载常量（缺失时使用默认值）
 def _load_config():
     defaults = {
+        'annotator': {'name': ''},  # 标注者名称
         'mesh': {
             'obj_decimation_target_faces': 30000,
             'obj_decimate_if_vertices_above': 5000,
@@ -154,6 +155,12 @@ def _get_current_user():
 
 
 def _get_user_id() -> str:
+    """获取当前用户ID，优先使用 config.yaml 中的 annotator.name"""
+    # 优先使用 config.yaml 中配置的标注者名称
+    annotator_name = CONFIG.get('annotator', {}).get('name', '')
+    if annotator_name:
+        return annotator_name
+    # 其次使用登录系统
     user = _get_current_user()
     if user:
         return user.get("username", "")
@@ -161,6 +168,12 @@ def _get_user_id() -> str:
 
 
 def _get_user_name() -> str:
+    """获取当前用户显示名称，优先使用 config.yaml 中的 annotator.name"""
+    # 优先使用 config.yaml 中配置的标注者名称
+    annotator_name = CONFIG.get('annotator', {}).get('name', '')
+    if annotator_name:
+        return annotator_name
+    # 其次使用登录系统
     user = _get_current_user()
     if user:
         return user.get("display_name", user.get("username", ""))
@@ -169,6 +182,81 @@ def _get_user_name() -> str:
 
 def _get_lock_key(session_folder: str) -> str:
     return f"hoi_{session_folder}"
+
+
+# ===== 视频目录锁文件管理（防止多人同时标注同一视频） =====
+ANNOTATING_LOCK_FILENAME = ".annotating_lock.json"
+
+
+def _get_video_lock_path(video_dir: str) -> Path:
+    """获取视频目录下的锁文件路径"""
+    return Path(video_dir) / ANNOTATING_LOCK_FILENAME
+
+
+def _read_video_lock(video_dir: str) -> dict:
+    """
+    读取视频目录下的锁文件。
+    返回 {'user_id': ..., 'user_name': ..., 'timestamp': ...} 或 None
+    """
+    lock_path = _get_video_lock_path(video_dir)
+    if not lock_path.exists():
+        return None
+    try:
+        with lock_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Failed to read video lock file {lock_path}: {e}")
+        return None
+
+
+def _write_video_lock(video_dir: str, user_id: str, user_name: str) -> bool:
+    """
+    在视频目录下创建锁文件。
+    """
+    lock_path = _get_video_lock_path(video_dir)
+    import datetime
+    lock_data = {
+        "user_id": user_id,
+        "user_name": user_name,
+        "timestamp": datetime.datetime.now().isoformat(),
+    }
+    try:
+        with lock_path.open("w", encoding="utf-8") as f:
+            json.dump(lock_data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Failed to write video lock file {lock_path}: {e}")
+        return False
+
+
+def _remove_video_lock(video_dir: str) -> bool:
+    """
+    删除视频目录下的锁文件。
+    """
+    lock_path = _get_video_lock_path(video_dir)
+    if not lock_path.exists():
+        return True
+    try:
+        lock_path.unlink()
+        return True
+    except Exception as e:
+        print(f"Failed to remove video lock file {lock_path}: {e}")
+        return False
+
+
+def _check_video_lock(video_dir: str, current_user_id: str) -> tuple:
+    """
+    检查视频目录下的锁文件。
+    返回 (can_proceed, lock_info_or_error_msg)
+    - 如果没有锁文件或锁文件是自己的，返回 (True, None)
+    - 如果锁文件是别人的，返回 (False, lock_info)
+    """
+    lock_info = _read_video_lock(video_dir)
+    if lock_info is None:
+        return (True, None)
+    if lock_info.get("user_id") == current_user_id:
+        return (True, None)
+    return (False, lock_info)
 
 
 def _init_hoi_tasks() -> None:
@@ -248,9 +336,9 @@ def _update_hoi_progress_for_video_dir(video_dir: str, finished: bool) -> None:
 
 def _reset_unfinished_hoi_locks() -> int:
     """
-    将所有 annotation_progress == 2.1 的记录检查一遍：
-    - 若 session_folder 下已存在 kp_record_merged.json -> 置为 3.0
-    - 否则 -> 置为 2.0
+    将所有 annotation_progress == 2.1 的记录重置为 2.0。
+    2.1 表示"正在标注"，如果服务器重启，应该将其重置为 2.0 以便用户可以继续标注。
+    不再检查 kp_record_merged.json，因为优化时也会创建该文件。
     返回本次修改的记录数量。
     """
     if not UPLOAD_RECORDS_PATH.exists():
@@ -273,15 +361,9 @@ def _reset_unfinished_hoi_locks() -> int:
         if prog != 2.1:
             continue
 
-        sf = rec.get("session_folder", "")
-        if not sf:
-            continue
-        sf_path = _resolve_session_path(sf)
-        kp_merged = sf_path / "kp_record_merged.json"
-        if kp_merged.exists():
-            rec["annotation_progress"] = 3.0
-        else:
-            rec["annotation_progress"] = 2.0
+        # 无论 kp_record_merged.json 是否存在，都重置为 2.0
+        # 因为优化时会创建该文件，但用户可能还没有完成标注
+        rec["annotation_progress"] = 2.0
         changed = True
         updated_count += 1
 
@@ -876,10 +958,10 @@ class SceneData:
 def load_mesh(obj_mesh):
     # if not os.path.exists(path):
     #     return None
-    
+
     # print(f"Loading mesh from {path}...")
     # mesh = o3d.io.read_triangle_mesh(path)
-    
+
     # if not mesh.has_vertices():
     #     return None
 
@@ -890,12 +972,23 @@ def load_mesh(obj_mesh):
     #     mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=20000)
     # sample_path=path.replace('.obj', '_sampled.obj')
     # o3d.io.write_triangle_mesh(sample_path, mesh)
-    
+
     vertices = np.asarray(obj_mesh.vertices).tolist()
     faces = np.asarray(obj_mesh.triangles).tolist()
-    
-    print(f"Mesh loaded: {len(vertices)} vertices, {len(faces)} faces")
-    return {'vertices': vertices, 'faces': faces}
+
+    # 提取顶点颜色（如果存在）
+    vertex_colors = None
+    if obj_mesh.has_vertex_colors():
+        colors = np.asarray(obj_mesh.vertex_colors)
+        # 转换为 RGB 十六进制颜色字符串
+        vertex_colors = ['rgb({},{},{})'.format(
+            int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)
+        ) for c in colors]
+        print(f"Mesh loaded: {len(vertices)} vertices, {len(faces)} faces, with vertex colors")
+    else:
+        print(f"Mesh loaded: {len(vertices)} vertices, {len(faces)} faces, no vertex colors")
+
+    return {'vertices': vertices, 'faces': faces, 'vertex_colors': vertex_colors}
 
 @app.route('/')
 def index():
@@ -969,6 +1062,31 @@ def api_me():
     return jsonify({"ok": True, "logged_in": True, "user": user})
 
 
+@app.get("/api/annotator")
+def api_annotator():
+    """获取当前配置的标注者信息"""
+    annotator_name = CONFIG.get('annotator', {}).get('name', '')
+    if annotator_name:
+        return jsonify({
+            "ok": True,
+            "annotator": annotator_name,
+            "source": "config"
+        })
+    # 如果没有配置，返回登录用户
+    user = _get_current_user()
+    if user:
+        return jsonify({
+            "ok": True,
+            "annotator": user.get("username", ""),
+            "source": "login"
+        })
+    return jsonify({
+        "ok": False,
+        "annotator": None,
+        "error": "未配置标注者，请在 config.yaml 中设置 annotator.name"
+    })
+
+
 @app.route('/api/hoi_tasks')
 def get_hoi_tasks():
     """
@@ -1001,12 +1119,29 @@ def get_hoi_tasks():
         lock_key = _get_lock_key(session_folder)
         lock_info = all_locks.get(lock_key)
 
+        # 检查视频目录锁文件
+        video_dir_path = _resolve_session_path(session_folder)
+        video_lock_info = None
+        # 不再检查 kp_record_merged.json 是否存在，因为优化时也会创建该文件
+        # 只依赖 annotation_progress 来判断是否已完成标注
+        if video_dir_path.exists():
+            video_lock_info = _read_video_lock(str(video_dir_path))
+
         rec_with_lock = {**rec}
-        rec_with_lock["_locked"] = lock_info is not None
-        rec_with_lock["_locked_by"] = lock_info.get("user_name") if lock_info else None
-        rec_with_lock["_locked_by_me"] = (
-            lock_info is not None and lock_info.get("user_id") == current_username
-        )
+        # 优先使用视频目录锁，如果不存在则使用 webapp_locks
+        if video_lock_info:
+            rec_with_lock["_locked"] = True
+            rec_with_lock["_locked_by"] = video_lock_info.get("user_name", video_lock_info.get("user_id"))
+            rec_with_lock["_locked_by_me"] = video_lock_info.get("user_id") == current_username
+            rec_with_lock["_locked_at"] = video_lock_info.get("timestamp")
+        elif lock_info is not None:
+            rec_with_lock["_locked"] = True
+            rec_with_lock["_locked_by"] = lock_info.get("user_name")
+            rec_with_lock["_locked_by_me"] = lock_info.get("user_id") == current_username
+        else:
+            rec_with_lock["_locked"] = False
+            rec_with_lock["_locked_by"] = None
+            rec_with_lock["_locked_by_me"] = False
         tasks.append(rec_with_lock)
 
     # 按 upload_method 排序：tiktok 优先，self 在后
@@ -1018,7 +1153,7 @@ def get_hoi_tasks():
             return 1
         else:
             return 2
-    # tasks.sort(key=_upload_method_sort_key)
+    tasks.sort(key=_upload_method_sort_key)
 
     # return jsonify({'tasks': tasks, 'total': len(tasks)})
 
@@ -1085,9 +1220,29 @@ def hoi_start():
         lock_manager.release(lock_key, user_id=user_id, force=True)
         return jsonify({'error': f'video_dir not exists: {video_dir_path}'}), 404
 
+    # 不再检查 kp_record_merged.json 是否存在，因为优化时也会创建该文件
+    # 只依赖 annotation_progress 来判断是否已完成标注（在上面已检查 prog == 2.0）
+
+    # 检查视频目录锁文件（防止多人同时标注）
+    can_proceed, lock_info = _check_video_lock(str(video_dir_path), user_id)
+    if not can_proceed:
+        lock_manager.release(lock_key, user_id=user_id, force=True)
+        locked_by = lock_info.get('user_name', lock_info.get('user_id', '未知用户'))
+        locked_at = lock_info.get('timestamp', '未知时间')
+        return jsonify({
+            'error': f'该视频正在被 {locked_by} 标注（开始于 {locked_at}）',
+            'locked': True,
+            'locked_by': locked_by,
+            'locked_at': locked_at,
+        }), 409
+
+    # 创建视频目录锁文件
+    _write_video_lock(str(video_dir_path), user_id, user_name)
+
     # 尝试加载该 session 对应的数据
     ok = _load_video_session(str(video_dir_path))
     if not ok:
+        _remove_video_lock(str(video_dir_path))
         lock_manager.release(lock_key, user_id=user_id, force=True)
         return jsonify({'error': f'failed to load video session at {video_dir_path}'}), 500
 
@@ -1147,11 +1302,82 @@ def hoi_finish():
     success, msg = lock_manager.release(lock_key, user_id=user_id)
     status_code = 200 if success else 403
 
+    # 删除视频目录锁文件
+    video_dir_path = _resolve_session_path(session_folder)
+    if video_dir_path.exists():
+        _remove_video_lock(str(video_dir_path))
+
     return jsonify({
         'ok': success,
         'message': msg,
         'annotation_progress': target_rec.get('annotation_progress'),
     }), status_code
+
+
+@app.route('/api/hoi_reannotate', methods=['POST'])
+def hoi_reannotate():
+    """
+    重新标注当前 session：
+    - 清除 kp_record 目录下的所有标注文件
+    - 清除 kp_record_merged.json
+    - 重新加载视频
+    """
+    global SCENE_DATA
+
+    payload = request.get_json(silent=True) or {}
+    session_folder = payload.get('session_folder')
+    if not isinstance(session_folder, str) or not session_folder:
+        return jsonify({'error': 'session_folder is required'}), 400
+
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({'error': '未登录或缺少用户信息'}), 401
+
+    # 解析为绝对路径
+    video_dir_path = _resolve_session_path(session_folder)
+    if not video_dir_path.exists():
+        return jsonify({'error': f'video_dir not exists: {video_dir_path}'}), 404
+
+    # 检查锁：必须是当前用户持有
+    lock_key = _get_lock_key(session_folder)
+    all_locks = lock_manager.get_all_locks()
+    lock_info = all_locks.get(lock_key)
+    if lock_info is None or lock_info.get("user_id") != user_id:
+        return jsonify({'error': '你没有锁定该视频，无法重新标注'}), 403
+
+    video_dir = str(video_dir_path)
+    deleted_files = []
+
+    # 1. 删除 kp_record 目录下的所有 JSON 文件
+    kp_dir = os.path.join(video_dir, 'kp_record')
+    if os.path.exists(kp_dir):
+        import shutil
+        try:
+            shutil.rmtree(kp_dir)
+            deleted_files.append(kp_dir)
+        except Exception as e:
+            print(f"Failed to delete kp_record dir: {e}")
+
+    # 2. 删除 kp_record_merged.json
+    kp_merged_path = os.path.join(video_dir, 'kp_record_merged.json')
+    if os.path.exists(kp_merged_path):
+        try:
+            os.remove(kp_merged_path)
+            deleted_files.append(kp_merged_path)
+        except Exception as e:
+            print(f"Failed to delete kp_record_merged.json: {e}")
+
+    # 3. 重新加载视频
+    ok = _load_video_session(video_dir)
+    if not ok:
+        return jsonify({'error': f'failed to reload video session at {video_dir}'}), 500
+
+    return jsonify({
+        'status': 'success',
+        'message': '已清除标注缓存并重新加载视频',
+        'deleted_files': deleted_files,
+        'video_dir': video_dir,
+    })
 
 
 @app.route('/api/hoi_mark_deleted', methods=['POST'])
@@ -1215,6 +1441,12 @@ def hoi_mark_deleted():
 
     # Release lock (best-effort)
     success, msg = lock_manager.release(lock_key, user_id=user_id)
+
+    # 删除视频目录锁文件
+    video_dir_path = _resolve_session_path(session_folder)
+    if video_dir_path.exists():
+        _remove_video_lock(str(video_dir_path))
+
     if not success:
         return jsonify({'error': msg, 'annotation_progress': -1.0}), 403
 
@@ -1324,19 +1556,26 @@ def get_frame(frame_idx):
 def get_mesh():
     if MESH_DATA is None:
         return jsonify({'error': 'Mesh not loaded'}), 404
-    
+
     # Prepare data for Plotly
     # x, y, z arrays
     vertices = MESH_DATA['vertices']
     faces = MESH_DATA['faces']
-    
+    vertex_colors = MESH_DATA.get('vertex_colors')
+
     x, y, z = zip(*vertices)
     i, j, k = zip(*faces) if faces else ([], [], [])
-    
-    return jsonify({
+
+    result = {
         'x': x, 'y': y, 'z': z,
         'i': i, 'j': j, 'k': k
-    })
+    }
+
+    # 添加顶点颜色（如果存在）
+    if vertex_colors:
+        result['vertex_colors'] = vertex_colors
+
+    return jsonify(result)
 
 @app.route('/api/scene_data/<int:frame_idx>')
 def get_scene_data(frame_idx):
@@ -1365,7 +1604,10 @@ def get_scene_data(frame_idx):
     ox, oy, oz = zip(*o_verts) if o_verts else ([], [], [])
     oi, oj, ok = zip(*o_faces) if o_faces else ([], [], [])
     
-    return jsonify({
+    # 获取物体顶点颜色（如果存在）
+    vertex_colors = MESH_DATA.get('vertex_colors') if MESH_DATA else None
+
+    result = {
         'human': {
             'x': list(hx), 'y': list(hy), 'z': list(hz),
             'i': list(hi), 'j': list(hj), 'k': list(hk)
@@ -1374,7 +1616,12 @@ def get_scene_data(frame_idx):
             'x': list(ox), 'y': list(oy), 'z': list(oz),
             'i': list(oi), 'j': list(oj), 'k': list(ok)
         }
-    })
+    }
+
+    if vertex_colors:
+        result['object']['vertex_colors'] = vertex_colors
+
+    return jsonify(result)
 
 @app.route('/api/focus_hand/<int:frame_idx>')
 def focus_hand(frame_idx):
@@ -1842,6 +2089,7 @@ def save_merged_annotations():
     # tracks), prefer building the merged structure from those, similar to
     # how app_new.py maintains per-frame kp_record automatically.
     joint_keyframes = payload.get('joint_keyframes') or {}
+    # print(joint_keyframes)
     visibility_keyframes = payload.get('visibility_keyframes') or {}
     tracks = payload.get('tracks') or {}
     total_frames = payload.get('total_frames')
@@ -1896,6 +2144,7 @@ def save_merged_annotations():
     # (i.e., keys present in part_kp.json / human_part). Otherwise we may
     # accept a merged file that later becomes underconstrained in optimization.
     valid_human_part_keys = None
+    valid_human_part_keys_lower = {}
     try:
         part_kp_path = os.path.join(app.root_path, 'solver', 'data', 'part_kp.json')
         if os.path.exists(part_kp_path):
@@ -1903,8 +2152,11 @@ def save_merged_annotations():
                 _hp = json.load(f) or {}
             if isinstance(_hp, dict):
                 valid_human_part_keys = set(_hp.keys())
+                # 创建小写到原始名称的映射，支持大小写不敏感匹配
+                valid_human_part_keys_lower = {k.lower(): k for k in _hp.keys()}
     except Exception:
         valid_human_part_keys = None
+        valid_human_part_keys_lower = {}
 
     try:
         if joint_keyframes or tracks:
@@ -1953,8 +2205,10 @@ def save_merged_annotations():
                             obj_idx_int = int(obj_idx_str)
                         except Exception:
                             obj_idx_int = obj_idx_str
+                        # 标准化关节名称大小写（匹配 part_kp.json 中的名称）
+                        normalized_name = valid_human_part_keys_lower.get(joint_name.lower(), joint_name) if valid_human_part_keys_lower else joint_name
                         # Last assignment wins if multiple objects use same joint
-                        joint_map[str(joint_name)] = obj_idx_int
+                        joint_map[str(normalized_name)] = obj_idx_int
 
                 # Write 3D keys into frame_kp
                 for joint_name, obj_idx_val in joint_map.items():
@@ -1983,7 +2237,8 @@ def save_merged_annotations():
                 if valid_human_part_keys is None:
                     num_3d = len([k for k in frame_kp.keys() if k != '2D_keypoint'])
                 else:
-                    num_3d = len([k for k in frame_kp.keys() if (k != '2D_keypoint' and k in valid_human_part_keys)])
+                    # 大小写不敏感匹配
+                    num_3d = len([k for k in frame_kp.keys() if (k != '2D_keypoint' and (k in valid_human_part_keys or k.lower() in valid_human_part_keys_lower))])
                 has_annotation = (num_2d > 0) or (num_3d > 0)
 
                 if has_annotation and first_annotated_frame is None:
@@ -2080,9 +2335,22 @@ def save_merged_annotations():
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
 
+        # Save the decimated mesh that was used during annotation
+        # IMPORTANT: Must save the TRANSFORMED mesh (with rotation, scaling, centering applied)
+        # because the user annotates on the transformed version displayed in the viewport
+        if SCENE_DATA is not None and hasattr(SCENE_DATA, 'obj_orgs') and len(SCENE_DATA.obj_orgs) > 0:
+            try:
+                # Save frame 0 (the reference frame used during annotation)
+                decimated_mesh_path = os.path.join(video_dir, 'obj_decimated.obj')
+                o3d.io.write_triangle_mesh(decimated_mesh_path, SCENE_DATA.obj_orgs[0])
+            except Exception as e:
+                print(f"Warning: Failed to save decimated mesh: {e}")
+
         # Only update progress when explicitly requested by the user.
         if update_progress:
             _update_hoi_progress_for_video_dir(video_dir, finished=True)
+            # 删除视频目录锁文件（标注完成）
+            _remove_video_lock(video_dir)
 
         return jsonify({
             'status': 'success',
@@ -2131,6 +2399,9 @@ def run_optimization():
     except Exception:
         start_frame = 0
 
+    # Read is_static_object flag from merged record
+    is_static_object = merged.get("is_static_object", False)
+
     # Clamp optimization window to requested frame (inclusive) to avoid long runs
     end_frame = min(SCENE_DATA.total_frames, max(last_frame, current_frame) + 1)
     if end_frame <= start_frame:
@@ -2148,6 +2419,7 @@ def run_optimization():
     # for the solver over the optimization window. This prevents obscure SciPy
     # errors (e.g., LM requiring m>=n) when effective DoF is too small.
     try:
+        # print(human_part.keys())
         valid_keys = set(human_part.keys()) if isinstance(human_part, dict) else set()
         with open(kp_record_path, 'r', encoding='utf-8') as f:
             merged_for_check = json.load(f) or {}
@@ -2225,7 +2497,9 @@ def run_optimization():
         # Determine which mesh to use for constraints
         # We use sampled_orgs (world space meshes) for constraints
 
-        
+        # Debug: Show optimization mode
+        print(f"DEBUG: Optimization mode - is_static_object={is_static_object}")
+
         # Run optimization
         new_body_params, new_icp_transforms = kp_use_new(
             output=None,
@@ -2239,7 +2513,7 @@ def run_optimization():
             start_frame=start_frame,
             end_frame=end_frame,
             video_dir=video_dir,
-            is_static_object=False,
+            is_static_object=is_static_object,
             kp_record_path=kp_record_path
         )
         
@@ -2269,6 +2543,15 @@ def run_optimization():
 
         # Update cached world meshes for visualization
         SCENE_DATA.update_world_meshes()
+
+        # Delete kp_record_merged.json after optimization to allow re-annotation
+        # The file will be created again when user clicks "保存标注"
+        if os.path.exists(kp_record_path):
+            try:
+                os.remove(kp_record_path)
+                print(f"DEBUG: Deleted {kp_record_path} after optimization")
+            except Exception as e:
+                print(f"Warning: Failed to delete {kp_record_path}: {e}")
 
         return jsonify({'status': 'success'})
         

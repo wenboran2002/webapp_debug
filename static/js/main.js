@@ -8,6 +8,7 @@ $(document).ready(function() {
     let sliderUpdateTimeout = null; // For throttling slider updates
     let dragDebounceTimer = null; // For debouncing frame updates during dragging
     let meshData = null;
+    let meshVertexColors = null; // 顶点颜色数组（如果 .obj 文件包含颜色）
     let selectedPoints = []; // Object points
     let activeObjectPointIndex = -1; // The currently selected object point for annotation
     let humanKeypoints = {}; // { jointName: {index, x, y, z} }
@@ -119,10 +120,16 @@ $(document).ready(function() {
     let currentSessionFolder = null;
     let selectedSessionFolder = null;
     let currentUser = null;
+    let annotatorFromConfig = null;  // 从 config.yaml 配置的标注者
 
-    function setUserUI(user) {
+    function setUserUI(user, fromConfig) {
         currentUser = user;
-        if (user && user.username) {
+        if (fromConfig) {
+            // 从配置文件获取的标注者，不显示登录/退出按钮
+            $('#user-name').text(user.username + ' (配置)');
+            $('#btn-login').hide();
+            $('#btn-logout').hide();
+        } else if (user && user.username) {
             $('#user-name').text(user.display_name || user.username);
             $('#btn-login').hide();
             $('#btn-logout').show();
@@ -133,19 +140,39 @@ $(document).ready(function() {
         }
     }
 
+    function fetchAnnotator() {
+        // 首先检查 config.yaml 中是否配置了标注者
+        return $.getJSON('api/annotator').done(function(resp) {
+            if (resp.ok && resp.annotator && resp.source === 'config') {
+                annotatorFromConfig = resp.annotator;
+                setUserUI({ username: resp.annotator, display_name: resp.annotator }, true);
+            } else {
+                // 没有配置标注者，回退到登录系统
+                fetchMe();
+            }
+        }).fail(function() {
+            fetchMe();
+        });
+    }
+
     function fetchMe() {
         return $.getJSON('api/me').done(function(resp) {
             if (resp.ok && resp.logged_in) {
-                setUserUI(resp.user);
+                setUserUI(resp.user, false);
             } else {
-                setUserUI(null);
+                setUserUI(null, false);
             }
         }).fail(function() {
-            setUserUI(null);
+            setUserUI(null, false);
         });
     }
 
     function promptLogin(cb) {
+        // 如果已经有配置的标注者，直接返回成功
+        if (annotatorFromConfig) {
+            if (cb) cb(true);
+            return;
+        }
         const name = window.prompt('请输入用户名用于登录');
         if (!name) {
             if (cb) cb(false);
@@ -157,7 +184,7 @@ $(document).ready(function() {
             contentType: 'application/json',
             data: JSON.stringify({ username: name.trim() })
         }).done(function(resp) {
-            setUserUI({ username: resp.username, display_name: resp.username });
+            setUserUI({ username: resp.username, display_name: resp.username }, false);
             if (cb) cb(true);
         }).fail(function(xhr) {
             const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
@@ -185,10 +212,10 @@ $(document).ready(function() {
     });
 
     // Initialize
-    fetchMe().always(function() {
+    fetchAnnotator().always(function() {
         loadJointTree();
         loadHumanSelectorData();
-        // 先加载 HOI 列表，用户选择并点击“开始标注”后，再拉取 metadata / mesh
+        // 先加载 HOI 列表，用户选择并点击"开始标注"后，再拉取 metadata / mesh
         loadHoiTasks();
     });
 
@@ -380,10 +407,10 @@ $(document).ready(function() {
         $('.context-menu').remove();
 
         const menu = $('<div class="context-menu"></div>');
-        
+
         // Add sub-joints
         const subJoints = jointTree[mainJoint] || [];
-        
+
         // Add main joint itself as an option
         const mainItem = $('<div class="context-menu-item"></div>')
             .text(mainJoint + " (Main)")
@@ -405,7 +432,7 @@ $(document).ready(function() {
                 menu.append(item);
             });
         }
-        
+
         // Add Cancel
         menu.append('<div class="context-menu-separator"></div>');
         const cancelItem = $('<div class="context-menu-item"></div>')
@@ -416,11 +443,19 @@ $(document).ready(function() {
         menu.append(cancelItem);
 
         $('body').append(menu);
-        
-        // Position menu
+
+        // Position menu - 对于 leftFoot 和 rightFoot，菜单显示在上方
+        const menuHeight = menu.outerHeight();
+        let posY = y;
+        if (mainJoint === 'leftFoot' || mainJoint === 'rightFoot') {
+            // 显示在点击位置的上方
+            posY = y - menuHeight - 10;
+            if (posY < 0) posY = 10; // 确保不超出屏幕顶部
+        }
+
         menu.css({
             left: x + 'px',
-            top: y + 'px',
+            top: posY + 'px',
             display: 'block'
         });
 
@@ -1152,7 +1187,25 @@ $(document).ready(function() {
                 loadHoiTasks();
             },
             error: function(xhr) {
-                const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+                const resp = xhr.responseJSON || {};
+                const msg = resp.error || xhr.statusText;
+
+                // 如果视频已被其他人标注完成，自动刷新列表并跳到下一个
+                if (resp.already_annotated) {
+                    $('#hoi-status').text('该视频已被标注完成，正在跳到下一个...');
+                    loadHoiTasks().always(function() {
+                        const nextSf = pickNextHoiSession(sessionFolder);
+                        if (nextSf) {
+                            selectedSessionFolder = nextSf;
+                            startHoiSession(nextSf);
+                        } else {
+                            $('#hoi-status').text('没有更多待标注的视频');
+                            $('#scene-status').text('Scene: idle');
+                        }
+                    });
+                    return;
+                }
+
                 $('#hoi-status').text('开始标注失败：' + msg);
                 $('#scene-status').text('Scene: error – ' + msg);
                 // Refresh list to show lock owner
@@ -1389,7 +1442,55 @@ $(document).ready(function() {
             btn.prop('disabled', false);
         });
     });
-    
+
+    // Re-annotate: clear cache and reload video
+    $('#btn-reannotate').on('click', function() {
+        const btn = $(this);
+        const session = currentSessionFolder || selectedSessionFolder;
+
+        if (!session) {
+            alert('未选择任何视频');
+            return;
+        }
+
+        const ok = confirm('确定要重新标注吗？\n\n这会清除当前视频的所有标注缓存（kp_record目录和kp_record_merged.json），并重新加载视频。');
+        if (!ok) return;
+
+        btn.prop('disabled', true);
+        $('#hoi-status').text('正在清除标注缓存并重新加载...');
+
+        $.ajax({
+            url: 'api/hoi_reannotate',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ session_folder: session })
+        }).done(function(resp) {
+            if (!resp || resp.status !== 'success') {
+                $('#hoi-status').text('重新标注失败：接口返回异常');
+                btn.prop('disabled', false);
+                return;
+            }
+
+            $('#hoi-status').text('已清除缓存，重新加载中...');
+
+            // Reset UI state
+            currentFrame = 0;
+            frameAnnotations = {};
+            annotationMap = {};
+
+            // Reload video info and first frame
+            loadVideoInfo();
+            loadFrame(0);
+
+            $('#hoi-status').text('重新标注准备完成');
+            btn.prop('disabled', false);
+        }).fail(function(xhr) {
+            const msg = (xhr && xhr.responseJSON && xhr.responseJSON.error) ? xhr.responseJSON.error : '请求失败';
+            $('#hoi-status').text('重新标注失败：' + msg);
+            btn.prop('disabled', false);
+        });
+    });
+
     // Scale slider debounce timer
     let scaleSliderDebounceTimer = null;
 
@@ -1561,8 +1662,15 @@ $(document).ready(function() {
             type: 'mesh3d',
             x: transformed.x, y: transformed.y, z: transformed.z,
             i: transformed.i, j: transformed.j, k: transformed.k,
-            color: 'lightblue', opacity: 0.8, name: 'Object (preview)'
+            opacity: 1.0, name: 'Object'
         };
+
+        // 如果有顶点颜色，使用 vertexcolor；否则使用浅蓝色
+        if (scaleViewerState.objectVertexColors && scaleViewerState.objectVertexColors.length > 0) {
+            objectTrace.vertexcolor = scaleViewerState.objectVertexColors;
+        } else {
+            objectTrace.color = 'lightblue';
+        }
 
         const layout = scaleViewerState.layout || {
             scene: { aspectmode: 'data', dragmode: 'orbit' },
@@ -1783,6 +1891,8 @@ $(document).ready(function() {
             // Cache base geometry for preview-only transforms
             scaleViewerState.baseHuman = human;
             scaleViewerState.baseObject = object;
+            // 保存物体顶点颜色（如果存在）
+            scaleViewerState.objectVertexColors = object.vertex_colors || null;
             scaleViewerState.baseScaleFactor = lastAppliedScale || 1.0;
             scaleViewerState.baseDiag = computeObjectDiag(object);
 
@@ -1935,6 +2045,8 @@ $(document).ready(function() {
         $('#scene-status').text('Scene: loading mesh...');
         $.get('api/mesh', function(data) {
             meshData = data;
+            // 保存顶点颜色（如果存在）
+            meshVertexColors = data.vertex_colors || null;
             renderMesh();
             $('#scene-status').text('Scene: ready');
         }).fail(function(xhr) {
@@ -1952,12 +2064,18 @@ $(document).ready(function() {
             i: meshData.i,
             j: meshData.j,
             k: meshData.k,
-            color: 'lightgray',
-            opacity: 0.8,
+            opacity: 1.0,
             flatshading: true,
             hoverinfo: 'none',
             name: 'Mesh'
         };
+
+        // 如果有顶点颜色，使用 vertexcolor；否则使用灰色
+        if (meshVertexColors && meshVertexColors.length > 0) {
+            meshTrace.vertexcolor = meshVertexColors;
+        } else {
+            meshTrace.color = 'lightgray';
+        }
 
         scatterTrace = {
             type: 'scatter3d',
@@ -2164,7 +2282,14 @@ $(document).ready(function() {
             y.push(p.y);
             z.push(p.z);
 
-            colors.push(p.index === activeObjectPointIndex ? 'blue' : 'red');
+            // 选中的点用蓝色高亮，其他点使用顶点颜色（如果有）或红色
+            if (p.index === activeObjectPointIndex) {
+                colors.push('blue');
+            } else if (meshVertexColors && meshVertexColors[p.index]) {
+                colors.push(meshVertexColors[p.index]);
+            } else {
+                colors.push('red');
+            }
 
             let status = '';
             if (objPointToJoint[p.index]) status = ` (Linked to ${objPointToJoint[p.index]})`;

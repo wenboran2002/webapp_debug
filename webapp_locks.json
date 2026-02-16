@@ -1,26 +1,8 @@
 {
-  "hoi_./tiktok_data/bass_guitar/20250920_200034": {
-    "user_id": "sirui",
-    "user_name": "sirui",
-    "lock_time": 1770883458.226629,
-    "timeout": 300
-  },
-  "hoi_./tiktok_data/bass_guitar/20250920_200126": {
-    "user_id": "boran3",
-    "user_name": "boran3",
-    "lock_time": 1770883424.3124695,
-    "timeout": 300
-  },
-  "hoi_./tiktok_data/bass_guitar/20250920_200055": {
-    "user_id": "luye",
-    "user_name": "luye",
-    "lock_time": 1770883429.2379024,
-    "timeout": 300
-  },
-  "hoi_./tiktok_data/pail with lid/20250922_222443": {
-    "user_id": "luye",
-    "user_name": "luye",
-    "lock_time": 1770883443.8125591,
+  "hoi_./tiktok_data/electric_guitar/20250830_201043_part_02": {
+    "user_id": "boran",
+    "user_name": "boran",
+    "lock_time": 1771151100.6277559,
     "timeout": 300
   }
 }

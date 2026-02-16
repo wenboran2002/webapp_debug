@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 1. 基础 API 配置
-export ANTHROPIC_AUTH_TOKEN="sk-W02O86BdesFqedovjwGSWHv6cCebBDoXzDFKifOcDQKFr1fr"
+export ANTHROPIC_AUTH_TOKEN="sk-fYvlXvBzdMK0TLzHsG6kGJB9mjxLl8GecqrxoqcjaWV1h1pN"
 export ANTHROPIC_BASE_URL="https://anyrouter.top"
 
 # 2. 定义清理函数：取消代理设置
