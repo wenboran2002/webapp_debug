@@ -2335,16 +2335,6 @@ def save_merged_annotations():
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
 
-        # Save the decimated mesh that was used during annotation
-        # IMPORTANT: Must save the TRANSFORMED mesh (with rotation, scaling, centering applied)
-        # because the user annotates on the transformed version displayed in the viewport
-        if SCENE_DATA is not None and hasattr(SCENE_DATA, 'obj_orgs') and len(SCENE_DATA.obj_orgs) > 0:
-            try:
-                # Save frame 0 (the reference frame used during annotation)
-                decimated_mesh_path = os.path.join(video_dir, 'obj_decimated.obj')
-                o3d.io.write_triangle_mesh(decimated_mesh_path, SCENE_DATA.obj_orgs[0])
-            except Exception as e:
-                print(f"Warning: Failed to save decimated mesh: {e}")
 
         # Only update progress when explicitly requested by the user.
         if update_progress:
